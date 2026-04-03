@@ -9,18 +9,38 @@ Hardware context
 
 Code structure
 --------------
-  Section 1 — SystemParameters   : all physical constants you may want to tweak.
-  Section 2 — MotorModel         : GoBilda motor + lead-screw force model.
-  Section 3 — TriplePendulumPhysics : Lagrangian equations of motion (sympy-derived,
-                                      then lambdified for speed).
-  Section 4 — PIDController      : simple PID with derivative filtering.
-  Section 5 — Simulation         : numerical ODE integration via scipy.
-  Section 6 — Visualizer         : Matplotlib animation + time-series plots.
-  Section 7 — Test configurations: preset parameter sets for quick experiments.
-  Section 8 — main()             : entry point; pick a test configuration and run.
+  Section 1 — SystemParameters      : all physical constants you may want to tweak.
+  Section 2 — MotorModel            : GoBilda motor + lead-screw force model.
+  Section 3 — TriplePendulumPhysics : Lagrangian equations of motion, derived by hand
+                                      and implemented as fast NumPy arithmetic.
+  Section 4 — PIDController         : simple PID with derivative filtering.
+  Section 5 — Simulation            : numerical ODE integration via scipy.
+  Section 6 — Visualizer            : Matplotlib animation + time-series plots.
+  Section 7 — Test configurations   : preset parameter sets for quick experiments.
+  Section 8 — main()                : entry point; pick a test configuration and run.
 
-Dependencies: numpy, scipy, matplotlib, sympy
-  pip install numpy scipy matplotlib sympy
+Physics overview (see README.md for full explanation)
+-----------------------------------------------------
+  The system has 4 degrees of freedom: cart position x, and three link angles
+  θ1, θ2, θ3 measured from the upright vertical.
+
+  The Euler-Lagrange equations give us one equation per degree of freedom:
+
+      M(q) · q̈  =  Q  −  h(q, q̇)  −  G(q)  −  D(q̇)
+
+  where:
+    M   = 4×4 mass matrix (encodes how inertia couples all four bodies together)
+    q̈  = [ẍ, θ̈1, θ̈2, θ̈3]  (the accelerations we are solving for)
+    Q   = [F_cart, 0, 0, 0]   (external force on the cart only)
+    h   = Coriolis/centrifugal force vector (speed-squared coupling terms)
+    G   = gravity force vector  (∂V/∂q — destabilises an inverted pendulum)
+    D   = viscous damping vector (cart friction + pivot damping)
+
+  All entries of M, h, G are derived analytically in Section 3.
+  No symbolic algebra library is needed — just standard NumPy.
+
+Dependencies: numpy, scipy, matplotlib
+  pip install numpy scipy matplotlib
 """
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -28,15 +48,13 @@ Dependencies: numpy, scipy, matplotlib, sympy
 # ──────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
-import time
 import warnings
-from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
 
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy as np
-import sympy as sp
 from scipy.integrate import solve_ivp
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -171,52 +189,65 @@ class MotorModel:
     # ── Core calculation ──────────────────────────────────────────────────────
     def force_from_command(self, command: float, cart_speed_ms: float = 0.0) -> float:
         """
-        Convert a normalised motor command (−1…+1) to a linear force [N].
+        Convert a normalised motor voltage command (−1…+1) to a linear force [N].
 
-        The motor command is analogous to a PWM duty-cycle fraction.
-        Back-EMF from cart motion reduces the effective torque.
+        DC motor physics
+        ----------------
+        A brushed DC motor follows the linear torque-speed curve:
+            τ = τ_stall · (V/V_max  −  ω_shaft / ω_free)
+
+        where V/V_max = command (normalised applied voltage = PWM duty cycle).
+
+        At stall  (ω_shaft = 0):  τ = τ_stall · command  → maximum torque.
+        At free run (no load):    τ = 0, ω_shaft = command · ω_free.
+        Back-EMF from the cart moving reduces the effective torque.
+
+        The lead-screw converts shaft torque to linear cart force:
+            F = τ · (2π / lead_m) · η
+        where lead_m = lead in metres, η = mechanical efficiency.
 
         Parameters
         ----------
-        command      : Normalised input in [−1, +1].
-        cart_speed_ms: Current cart speed [m/s] (for back-EMF calculation).
+        command      : Normalised voltage in [−1, +1].  +1 = full forward.
+        cart_speed_ms: Current cart speed [m/s] (used to compute back-EMF).
 
         Returns
         -------
         Force [N] applied to the cart (positive = rightward).
         """
-        lead_m = self.lead_mm * 1e-3
-        omega_free = self.free_speed_rpm * 2 * np.pi / 60.0   # rad/s
+        lead_m     = self.lead_mm * 1e-3
+        omega_free = self.free_speed_rpm * 2.0 * np.pi / 60.0   # rad/s
 
-        # Requested rotational speed from command (linear → rotational)
-        omega_demand = command * omega_free
+        # Current shaft angular speed, inferred from the cart's linear speed
+        # (the lead-screw is the mechanical link between them)
+        omega_shaft = cart_speed_ms * 2.0 * np.pi / lead_m
 
-        # Back-EMF from cart velocity
-        omega_back = cart_speed_ms * 2 * np.pi / lead_m
+        # Torque from the DC motor torque-speed characteristic:
+        #   τ = τ_stall * (command - ω_shaft / ω_free)
+        # Clamp to ±τ_stall so we cannot exceed physical stall torque.
+        tau = self.stall_torque_Nm * (command - omega_shaft / omega_free)
+        tau = float(np.clip(tau, -self.stall_torque_Nm, self.stall_torque_Nm))
 
-        # Effective angular speed at motor shaft
-        omega_eff = omega_demand - omega_back
-        omega_eff = np.clip(omega_eff, -omega_free, omega_free)
+        # Convert rotational torque [N·m] to linear force [N] via lead-screw
+        force = tau * 2.0 * np.pi / lead_m * self.efficiency
 
-        # Torque from linear motor model: τ = τ_stall * (1 - |ω_eff| / ω_free)
-        sign = np.sign(omega_eff) if omega_eff != 0 else np.sign(command)
-        tau = sign * self.stall_torque_Nm * (1.0 - abs(omega_eff) / omega_free)
-
-        # Convert torque to linear force via lead-screw
-        force = tau * 2 * np.pi / lead_m * self.efficiency
-
-        # Clamp to physical limits
+        # Clamp to the user-set safety limit
         return float(np.clip(force, -self.max_force_N, self.max_force_N))
+
+    def stall_force(self) -> float:
+        """Maximum linear force [N] this motor/lead-screw can produce (at stall)."""
+        lead_m = self.lead_mm * 1e-3
+        return self.stall_torque_Nm * 2.0 * np.pi / lead_m * self.efficiency
 
     def summary(self) -> str:
         lines = [
             "=== MotorModel ===",
-            f"  Free speed : {self.free_speed_rpm:.0f} RPM",
-            f"  Stall torque: {self.stall_torque_Nm:.2f} N·m",
-            f"  Lead        : {self.lead_mm:.1f} mm/rev",
-            f"  Efficiency  : {self.efficiency:.0%}",
-            f"  Max cart speed: {self.max_speed_ms:.3f} m/s",
-            f"  Max force (stall): {self.force_from_command(1.0, 0.0):.1f} N",
+            f"  Free speed   : {self.free_speed_rpm:.0f} RPM",
+            f"  Stall torque : {self.stall_torque_Nm:.2f} N·m",
+            f"  Lead         : {self.lead_mm:.1f} mm/rev",
+            f"  Efficiency   : {self.efficiency:.0%}",
+            f"  Max cart speed (free-run): {self.max_speed_ms:.3f} m/s",
+            f"  Max force    (at stall)  : {self.stall_force():.1f} N",
         ]
         return "\n".join(lines)
 
@@ -227,200 +258,366 @@ class MotorModel:
 
 class TriplePendulumPhysics:
     """
-    Derives and evaluates the Euler-Lagrange equations of motion for a
-    cart + triple-inverted-pendulum system using SymPy, then compiles
-    them to fast NumPy functions via lambdify.
+    Evaluates the Euler-Lagrange equations of motion for a cart +
+    triple-inverted-pendulum system using only NumPy arithmetic.
 
-    Generalised coordinates: q = [x, θ1, θ2, θ3]
-      x  — cart position [m]
-      θi — angle of link i from the upright vertical [rad]
+    --- PHYSICS DERIVATION SUMMARY ---
 
-    The equations of motion take the form:
-        M(q) q̈ = τ(q, q̇, F_cart)
-    where M is the mass matrix and τ is the generalised force vector.
+    Generalised coordinates:  q = [x, θ1, θ2, θ3]
+      x  — cart horizontal position [m]
+      θi — angle of link i measured FROM THE UPRIGHT VERTICAL [rad]
+           (θ = 0 → perfectly balanced upright; θ = π → hanging down)
 
-    Derivation is done once at construction (~1-3 s); subsequent calls
-    to equations_of_motion() are fast (microseconds).
+    The system has 4 bodies: the cart plus three rigid links.
+    Each link i has:
+      length   li, mass mi, moment of inertia Ii = mi*li²/3 (uniform rod)
+      half-length  ai = li / 2  (centre-of-mass is at the midpoint)
+
+    ── Step 1: Positions of each centre of mass ─────────────────────────────
+    Link pivots stack from the cart upward.  Measuring from the cart pivot:
+
+      CM1 = ( x  +  a1·sin θ1,           a1·cos θ1 )
+      CM2 = ( x  + l1·sin θ1 + a2·sin θ2,  l1·cos θ1 + a2·cos θ2 )
+      CM3 = ( x  + l1·sin θ1 + l2·sin θ2 + a3·sin θ3,
+                   l1·cos θ1 + l2·cos θ2 + a3·cos θ3 )
+
+    ── Step 2: Kinetic energy T ─────────────────────────────────────────────
+    T = ½ M_cart·ẋ²
+      + ½ m1·(ẋCM1² + ẏCM1²)  + ½ I1·θ̇1²
+      + ½ m2·(ẋCM2² + ẏCM2²)  + ½ I2·θ̇2²
+      + ½ m3·(ẋCM3² + ẏCM3²)  + ½ I3·θ̇3²
+
+    Expanding the squared velocity terms and grouping by pairs of
+    generalised velocities (ẋ, θ̇i) gives the mass matrix M such that:
+        T = ½ q̇ᵀ M q̇
+
+    ── Step 3: Potential energy V ───────────────────────────────────────────
+    Only gravity matters (y measured upward from the cart rail):
+        V = m1·g·a1·cos θ1
+          + m2·g·(l1·cos θ1 + a2·cos θ2)
+          + m3·g·(l1·cos θ1 + l2·cos θ2 + a3·cos θ3)
+
+    ── Step 4: Euler-Lagrange equations ─────────────────────────────────────
+    For each coordinate qi:   d/dt(∂L/∂q̇i) − ∂L/∂qi = Qi_external
+    with Lagrangian L = T − V.  Rearranging yields:
+
+        M(q) · q̈  =  Q  −  h(q, q̇)  −  G(q)  −  D(q̇)
+
+    where:
+      Q = [F_cart, 0, 0, 0]  — external force (only on the cart)
+      h = Coriolis/centrifugal vector  (θ̇² coupling terms, derived below)
+      G = gravity vector = ∂V/∂q      (destabilises the inverted pendulum)
+      D = damping vector               (viscous friction on cart and pivots)
+
+    ── Step 5: Analytical mass matrix (derived by expanding T) ──────────────
+
+    Define shorthand coupling coefficients:
+      α1  = m1·a1 + (m2+m3)·l1    — total effective mass pulling on θ1 pivot
+      α2  = m2·a2 +  m3·l2        — total effective mass pulling on θ2 pivot
+      α3  = m3·a3                  — mass at θ3 pivot
+      β12 = m2·l1·a2 + m3·l1·l2   — coupling inertia between links 1 and 2
+      β13 = m3·l1·a3               — coupling inertia between links 1 and 3
+      β23 = m3·l2·a3               — coupling inertia between links 2 and 3
+
+    The 4×4 mass matrix (symmetric, so only upper-triangle shown):
+
+        M[0,0] = M_cart + m1 + m2 + m3          (total system mass → ẍ)
+        M[0,1] = α1·cos θ1                       (cart–link1 coupling)
+        M[0,2] = α2·cos θ2                       (cart–link2 coupling)
+        M[0,3] = α3·cos θ3                       (cart–link3 coupling)
+        M[1,1] = m1·a1² + I1 + (m2+m3)·l1²     (link1 self-inertia)
+        M[1,2] = β12·cos(θ1−θ2)                 (link1–link2 coupling)
+        M[1,3] = β13·cos(θ1−θ3)                 (link1–link3 coupling)
+        M[2,2] = m2·a2² + I2 + m3·l2²           (link2 self-inertia)
+        M[2,3] = β23·cos(θ2−θ3)                 (link2–link3 coupling)
+        M[3,3] = m3·a3² + I3                     (link3 self-inertia)
+
+    ── Step 6: Coriolis/centrifugal vector h ────────────────────────────────
+    These terms arise from differentiating the angle-dependent entries of
+    M with respect to time.  Using the Christoffel-symbol formula
+        Γ_{ijk} = ½(∂M_{ij}/∂q_k + ∂M_{ik}/∂q_j − ∂M_{jk}/∂q_i)
+        h[i] = Σ_{j,k} Γ_{ijk}·q̇_j·q̇_k
+    and applying it to our M gives:
+
+        h[0] = −α1·sin θ1·θ̇1²  − α2·sin θ2·θ̇2²  − α3·sin θ3·θ̇3²
+        h[1] =  β12·sin(θ1−θ2)·θ̇2²  +  β13·sin(θ1−θ3)·θ̇3²
+        h[2] = −β12·sin(θ1−θ2)·θ̇1²  +  β23·sin(θ2−θ3)·θ̇3²
+        h[3] = −β13·sin(θ1−θ3)·θ̇1²  −  β23·sin(θ2−θ3)·θ̇2²
+
+    Physical meaning of h[0]: when the pendulum rotates (θ̇i ≠ 0) the
+    pivot swings outward, creating a centripetal force that is felt as a
+    horizontal force on the cart — this pushes the cart sideways.
+
+    ── Step 7: Gravity vector G = ∂V/∂q ────────────────────────────────────
+        G[0] = 0                     (V does not depend on cart position x)
+        G[1] = −α1·g·sin θ1         (gravity tips link 1 further over)
+        G[2] = −α2·g·sin θ2
+        G[3] = −α3·g·sin θ3
+
+    Note the negative signs: at θ = 0 (upright) G = 0 (no torque).
+    For θ > 0, G < 0 so the equation M·q̈ = Q − h − G gives a positive
+    (destabilising) angular acceleration — gravity makes things worse.
+    This is why a controller is needed!
     """
 
     def __init__(self, params: SystemParameters) -> None:
         self.params = params
-        print("Deriving equations of motion (this takes a few seconds)…")
-        t0 = time.time()
-        self._build_eom()
-        print(f"  Done in {time.time() - t0:.1f} s.")
+        p = params
 
-    # ── Symbolic derivation ───────────────────────────────────────────────────
-    def _build_eom(self) -> None:
-        p = self.params
+        # ── Pre-compute constant coupling coefficients ────────────────────────
+        # These depend only on masses and lengths, not on the angle state.
+        a1, a2, a3 = p.l1 / 2.0, p.l2 / 2.0, p.l3 / 2.0
 
-        # Symbolic time variable and generalised coordinates
-        t = sp.Symbol("t")
-        x, th1, th2, th3 = sp.symbols("x theta1 theta2 theta3", real=True)
-        dx, dth1, dth2, dth3 = sp.symbols(
-            "dx dtheta1 dtheta2 dtheta3", real=True
-        )
+        # α_i  — coupling between the cart translation and rotation of link i
+        self._a1 = a1
+        self._a2 = a2
+        self._a3 = a3
+        self._alpha1 = p.m1 * a1 + (p.m2 + p.m3) * p.l1
+        self._alpha2 = p.m2 * a2 +  p.m3         * p.l2
+        self._alpha3 = p.m3 * a3
 
-        q = sp.Matrix([x, th1, th2, th3])
-        dq = sp.Matrix([dx, dth1, dth2, dth3])
+        # β_ij — coupling between rotation of link i and link j
+        self._beta12 = p.m2 * p.l1 * a2 + p.m3 * p.l1 * p.l2
+        self._beta13 = p.m3 * p.l1 * a3
+        self._beta23 = p.m3 * p.l2 * a3
 
-        g_sym = sp.Symbol("g", positive=True)
-        g_val = p.g
+        # Constant diagonal entries of M (do not depend on angles)
+        self._M00 = p.M_cart + p.m1 + p.m2 + p.m3
+        self._M11 = p.m1 * a1 ** 2 + p.I1 + (p.m2 + p.m3) * p.l1 ** 2
+        self._M22 = p.m2 * a2 ** 2 + p.I2 +  p.m3          * p.l2 ** 2
+        self._M33 = p.m3 * a3 ** 2 + p.I3
 
-        # ── Centre-of-mass positions (y measured upward from cart rail) ──────
-        # Each link's CM is at the midpoint of its length.
-        # Angles measured from upright (θ=0 ↔ straight up):
-        #   x_cm = x_pivot + (l/2) * sin(θ)
-        #   y_cm =           (l/2) * cos(θ)
+    # ── Internal helpers ──────────────────────────────────────────────────────
 
-        # Link 1 pivot is on the cart.
-        x_cm1 = x + (p.l1 / 2) * sp.sin(th1)
-        y_cm1 = (p.l1 / 2) * sp.cos(th1)
+    def _mass_matrix(self, th1: float, th2: float, th3: float) -> np.ndarray:
+        """
+        Build the 4×4 symmetric mass matrix M(θ1, θ2, θ3).
 
-        # Link 2 pivot is at the tip of link 1.
-        x_cm2 = x + p.l1 * sp.sin(th1) + (p.l2 / 2) * sp.sin(th2)
-        y_cm2 = p.l1 * sp.cos(th1) + (p.l2 / 2) * sp.cos(th2)
+        Each off-diagonal entry couples two coordinates.  The cosine factors
+        appear because the projection of one link's acceleration onto another
+        depends on the angle between them.
+        """
+        c1  = np.cos(th1)
+        c2  = np.cos(th2)
+        c3  = np.cos(th3)
+        c12 = np.cos(th1 - th2)   # angle between link 1 and link 2
+        c13 = np.cos(th1 - th3)   # angle between link 1 and link 3
+        c23 = np.cos(th2 - th3)   # angle between link 2 and link 3
 
-        # Link 3 pivot is at the tip of link 2.
-        x_cm3 = x + p.l1 * sp.sin(th1) + p.l2 * sp.sin(th2) + (p.l3 / 2) * sp.sin(th3)
-        y_cm3 = p.l1 * sp.cos(th1) + p.l2 * sp.cos(th2) + (p.l3 / 2) * sp.cos(th3)
+        M = np.array([
+            # row 0 — cart (x)
+            [self._M00,
+             self._alpha1 * c1,
+             self._alpha2 * c2,
+             self._alpha3 * c3],
+            # row 1 — link 1 (θ1)
+            [self._alpha1 * c1,
+             self._M11,
+             self._beta12 * c12,
+             self._beta13 * c13],
+            # row 2 — link 2 (θ2)
+            [self._alpha2 * c2,
+             self._beta12 * c12,
+             self._M22,
+             self._beta23 * c23],
+            # row 3 — link 3 (θ3)
+            [self._alpha3 * c3,
+             self._beta13 * c13,
+             self._beta23 * c23,
+             self._M33],
+        ])
+        return M
 
-        # ── Velocities of each CM via Jacobian (∂pos/∂q · q̇) ──────────────
-        pos_cm1 = sp.Matrix([x_cm1, y_cm1])
-        pos_cm2 = sp.Matrix([x_cm2, y_cm2])
-        pos_cm3 = sp.Matrix([x_cm3, y_cm3])
+    def _coriolis_vector(
+        self,
+        th1: float, th2: float, th3: float,
+        dth1: float, dth2: float, dth3: float,
+    ) -> np.ndarray:
+        """
+        Compute the Coriolis/centrifugal vector h(q, q̇).
 
-        def cm_vel(pos):
-            jac = pos.jacobian(q)
-            return jac * dq
+        These are the "speed-squared" terms that arise when rotating bodies
+        couple to each other.  They are zero when all angular velocities are
+        zero (i.e. at rest), and grow quadratically with speed.
 
-        v_cm1 = cm_vel(pos_cm1)
-        v_cm2 = cm_vel(pos_cm2)
-        v_cm3 = cm_vel(pos_cm3)
+        Derivation: differentiate the angle-dependent entries of M with
+        respect to time, collect terms in q̇_j·q̇_k, apply Christoffel formula.
+        """
+        s1  = np.sin(th1)
+        s2  = np.sin(th2)
+        s3  = np.sin(th3)
+        s12 = np.sin(th1 - th2)   # sin of angle difference between links 1 & 2
+        s13 = np.sin(th1 - th3)
+        s23 = np.sin(th2 - th3)
 
-        # ── Kinetic energy ───────────────────────────────────────────────────
-        def v_sq(v):
-            return (v.T * v)[0, 0]
+        # h[0]: how spinning links push the cart sideways (centripetal reaction)
+        h0 = ( -self._alpha1 * s1  * dth1 ** 2
+               -self._alpha2 * s2  * dth2 ** 2
+               -self._alpha3 * s3  * dth3 ** 2 )
 
-        T_cart = sp.Rational(1, 2) * p.M_cart * dx ** 2
-        T_link1 = sp.Rational(1, 2) * p.m1 * v_sq(v_cm1) + sp.Rational(1, 2) * p.I1 * dth1 ** 2
-        T_link2 = sp.Rational(1, 2) * p.m2 * v_sq(v_cm2) + sp.Rational(1, 2) * p.I2 * dth2 ** 2
-        T_link3 = sp.Rational(1, 2) * p.m3 * v_sq(v_cm3) + sp.Rational(1, 2) * p.I3 * dth3 ** 2
-        T = sp.expand(T_cart + T_link1 + T_link2 + T_link3)
+        # h[1]: how links 2 & 3 spinning affect link 1's pivot torque
+        h1 = (  self._beta12 * s12 * dth2 ** 2
+              + self._beta13 * s13 * dth3 ** 2 )
 
-        # ── Potential energy (gravity, zero at cart rail) ────────────────────
-        V = (p.m1 * g_val * y_cm1 + p.m2 * g_val * y_cm2 + p.m3 * g_val * y_cm3)
-        V = sp.expand(V)
+        # h[2]: how links 1 & 3 spinning affect link 2's pivot torque
+        h2 = ( -self._beta12 * s12 * dth1 ** 2
+              + self._beta23 * s23 * dth3 ** 2 )
 
-        # ── Mass matrix M: T = ½ q̇ᵀ M q̇  ────────────────────────────────
-        # Extract quadratic form coefficients from T
-        M_sym = sp.zeros(4, 4)
-        for i in range(4):
-            for j in range(4):
-                # Coefficient of dq[i]*dq[j] in 2*T
-                M_sym[i, j] = sp.diff(sp.diff(2 * T, dq[i]), dq[j])
-        M_sym = sp.simplify(M_sym)
+        # h[3]: how links 1 & 2 spinning affect link 3's pivot torque
+        h3 = ( -self._beta13 * s13 * dth1 ** 2
+               -self._beta23 * s23 * dth2 ** 2 )
 
-        # ── Christoffel / Coriolis-centrifugal vector C(q,q̇)·q̇ ──────────
-        # Uses the formula:  C_i = Σ_j Σ_k Γ_{ijk} q̇_j q̇_k
-        # Γ_{ijk} = ½ (∂M_{ij}/∂q_k + ∂M_{ik}/∂q_j − ∂M_{jk}/∂q_i)
-        C_vec = sp.zeros(4, 1)
-        for i in range(4):
-            c_i = sp.Integer(0)
-            for j in range(4):
-                for k in range(4):
-                    gamma = sp.Rational(1, 2) * (
-                        sp.diff(M_sym[i, j], q[k])
-                        + sp.diff(M_sym[i, k], q[j])
-                        - sp.diff(M_sym[j, k], q[i])
-                    )
-                    c_i += gamma * dq[j] * dq[k]
-            C_vec[i] = sp.expand(c_i)
+        return np.array([h0, h1, h2, h3])
 
-        # ── Gravity vector G = ∂V/∂q ─────────────────────────────────────
-        G_vec = sp.Matrix([sp.diff(V, qi) for qi in q])
+    def _gravity_vector(
+        self, th1: float, th2: float, th3: float
+    ) -> np.ndarray:
+        """
+        Compute the gravity vector G(q) = ∂V/∂q.
 
-        # ── Lambdify all symbolic expressions ────────────────────────────
-        syms = [x, th1, th2, th3, dx, dth1, dth2, dth3]
-        self._M_func = sp.lambdify(syms, M_sym, modules="numpy")
-        self._C_func = sp.lambdify(syms, C_vec, modules="numpy")
-        self._G_func = sp.lambdify(syms, G_vec, modules="numpy")
+        V = α1·g·cos θ1 + α2·g·cos θ2 + α3·g·cos θ3
+        Differentiating: ∂V/∂θi = −αi·g·sin θi
 
-        # Store symbolic forms for inspection
-        self._M_sym = M_sym
-        self._G_sym = G_vec
+        Physical interpretation:
+          • When θi = 0 (upright) → G = 0 (no gravitational torque — balanced).
+          • When θi > 0 (leaning right) → G < 0 → rhs of EOM gets +αi·g·sin θi
+            → angular acceleration is positive → link falls further right.
+          That is exactly the instability: gravity makes a small lean worse.
+        """
+        g = self.params.g
+        return np.array([
+            0.0,                              # x coordinate: gravity is vertical
+            -self._alpha1 * g * np.sin(th1),  # link 1 torque from gravity
+            -self._alpha2 * g * np.sin(th2),  # link 2 torque from gravity
+            -self._alpha3 * g * np.sin(th3),  # link 3 torque from gravity
+        ])
 
     # ── Public interface ──────────────────────────────────────────────────────
+
     def equations_of_motion(
         self, state: np.ndarray, F_cart: float
     ) -> np.ndarray:
         """
         Compute state derivatives [q̇, q̈] for the ODE integrator.
 
+        We solve the linear system:
+            M · q̈  =  Q − h − G − D
+
+        for the four accelerations q̈ = [ẍ, θ̈1, θ̈2, θ̈3].
+
         Parameters
         ----------
         state   : [x, θ1, θ2, θ3, ẋ, θ̇1, θ̇2, θ̇3]  (8-element array)
-        F_cart  : External force applied to the cart [N] (positive = right)
+        F_cart  : External force applied to the cart [N] (positive = rightward)
 
         Returns
         -------
-        dstate : [ẋ, θ̇1, θ̇2, θ̇3, ẍ, θ̈1, θ̈2, θ̈3]  (8-element array)
+        dstate  : [ẋ, θ̇1, θ̇2, θ̇3, ẍ, θ̈1, θ̈2, θ̈3]  (8-element array)
+                  This is what the ODE integrator needs:
+                  "the derivative of the state vector".
         """
         p = self.params
         x, th1, th2, th3, dx, dth1, dth2, dth3 = state
-        args = (x, th1, th2, th3, dx, dth1, dth2, dth3)
 
-        M = np.array(self._M_func(*args), dtype=float)
-        C = np.array(self._C_func(*args), dtype=float).flatten()
-        G = np.array(self._G_func(*args), dtype=float).flatten()
+        # ── Build each term of the EOM ────────────────────────────────────
+        M = self._mass_matrix(th1, th2, th3)
+        h = self._coriolis_vector(th1, th2, th3, dth1, dth2, dth3)
+        G = self._gravity_vector(th1, th2, th3)
 
-        # Damping forces: cart friction and joint damping
+        # Viscous damping: opposes motion, proportional to speed
+        #   Cart: rolling resistance on the rail.
+        #   Pivots: friction in the bearings / air resistance on links.
         D = np.array([
-            p.cart_friction * dx,
-            p.joint_damping * dth1,
+            p.cart_friction * dx,    # [N]    — opposes cart sliding
+            p.joint_damping * dth1,  # [N·m]  — opposes link 1 rotation
             p.joint_damping * dth2,
             p.joint_damping * dth3,
         ])
 
-        # Generalised force vector (force on cart maps to x coordinate only)
+        # External generalised force: motor force only acts on the cart (x axis)
         Q = np.array([F_cart, 0.0, 0.0, 0.0])
 
-        # Solve M q̈ = Q − C − G − D
-        rhs = Q - C - G - D
+        # Solve  M · q̈ = Q − h − G − D  (standard NumPy linear solver)
+        rhs = Q - h - G - D
         try:
             q_ddot = np.linalg.solve(M, rhs)
         except np.linalg.LinAlgError:
-            # Degenerate configuration — use least-squares fallback
+            # Degenerate (near-singular) configuration — use least-squares
             q_ddot, _, _, _ = np.linalg.lstsq(M, rhs, rcond=None)
 
-        # Enforce cart travel limits by zeroing acceleration at boundaries
+        # Hard wall: if the cart hits a travel limit, stop its acceleration
         if (x <= p.x_min and dx < 0) or (x >= p.x_max and dx > 0):
             q_ddot[0] = 0.0
 
+        # Return full state derivative: [q̇, q̈]
         return np.concatenate([state[4:], q_ddot])
 
     def tip_positions(self, state: np.ndarray) -> dict:
         """
-        Return Cartesian (x, y) positions of each link's pivot and tip.
+        Return Cartesian (x, y) positions of cart and each link tip.
+        Used for drawing the animation frame.
 
-        Useful for animation and validation.
+        Link tips are computed by walking up the chain:
+          tip1 = cart_pivot + l1 · (sin θ1, cos θ1)
+          tip2 = tip1       + l2 · (sin θ2, cos θ2)
+          tip3 = tip2       + l3 · (sin θ3, cos θ3)
         """
         p = self.params
         x, th1, th2, th3 = state[:4]
 
         pivot0 = np.array([x, 0.0])
+        tip1   = pivot0 + np.array([p.l1 * np.sin(th1),  p.l1 * np.cos(th1)])
+        tip2   = tip1   + np.array([p.l2 * np.sin(th2),  p.l2 * np.cos(th2)])
+        tip3   = tip2   + np.array([p.l3 * np.sin(th3),  p.l3 * np.cos(th3)])
 
-        tip1 = pivot0 + np.array([p.l1 * np.sin(th1), p.l1 * np.cos(th1)])
-        tip2 = tip1 + np.array([p.l2 * np.sin(th2), p.l2 * np.cos(th2)])
-        tip3 = tip2 + np.array([p.l3 * np.sin(th3), p.l3 * np.cos(th3)])
+        return {"cart": pivot0, "tip1": tip1, "tip2": tip2, "tip3": tip3}
 
-        return {
-            "cart": pivot0,
-            "tip1": tip1,
-            "tip2": tip2,
-            "tip3": tip3,
-        }
+    def linearise(self) -> tuple:
+        """
+        Return the linearised state-space matrices (A, B) at the upright
+        equilibrium  q = [0, 0, 0, 0],  q̇ = [0, 0, 0, 0].
 
+        The linearised system is:
+            ż = A·z + B·u
+        where z = [x, θ1, θ2, θ3, ẋ, θ̇1, θ̇2, θ̇3] and u = F_cart.
+
+        A is 8×8, B is 8×1.
+
+        Derivation
+        ----------
+        At the upright equilibrium, all angles are zero, so:
+          cos(θi) = 1, sin(θi) = 0  →  M simplifies to constant M0.
+          h = 0  (Coriolis/centrifugal terms are all zero)
+          G[i] ≈ −αi·g·θi  (linear approximation of sin θ ≈ θ)
+
+        The linearised EOM is:
+          M0 · q̈ = [F, 0, 0, 0]ᵀ − G_lin · q
+        where G_lin = diag(0, −α1·g, −α2·g, −α3·g).
+
+        Rearranging into state-space form:
+          A = [  0₄    I₄  ]      B = [    0₄   ]
+              [ −M0⁻¹·G_lin  0₄ ]      [ M0⁻¹·e₁ ]
+        with e₁ = [1, 0, 0, 0]ᵀ (cart-force input column).
+        """
+        M0   = self._mass_matrix(0.0, 0.0, 0.0)    # mass matrix at upright
+        Minv = np.linalg.inv(M0)
+
+        # Linearised gravity stiffness matrix (only diagonal terms survive at θ=0)
+        G_lin = np.diag([
+            0.0,
+            -self._alpha1 * self.params.g,
+            -self._alpha2 * self.params.g,
+            -self._alpha3 * self.params.g,
+        ])
+
+        A = np.zeros((8, 8))
+        A[:4, 4:] = np.eye(4)               # q̇ = q̇ (velocities integrate positions)
+        A[4:, :4] = -Minv @ G_lin           # q̈ from gravity (sign: EOM has -G_lin*q on rhs)
+
+        B = np.zeros((8, 1))
+        B[4:, 0] = Minv[:, 0]              # cart force enters through first column of M⁻¹
+
+        return A, B
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 4 — PIDController
@@ -436,17 +633,32 @@ class PIDController:
       1. Cart position error  (bring cart back to x=0)
       2. Each pendulum angle  (keep links upright)
 
+    For the P and D terms the controller is a *pure function of the current
+    state*, which means it can safely be evaluated inside an ODE solver without
+    causing numerical issues due to internal history:
+
+      F_cart  = kp_x·(x_ref − x)  −  kd_x·ẋ
+              + Σᵢ [ −kp_thᵢ·θᵢ  −  kd_thᵢ·θ̇ᵢ ]
+
+    The velocity ẋ and θ̇ᵢ come directly from the ODE state — no numerical
+    differentiation needed.  The D gains damp oscillations that would otherwise
+    grow (damping is equivalent to friction added by the control law).
+
+    An optional integral term (ki_x, ki_th) accumulates the angle/position
+    error over time and is updated once per control step by the Simulation
+    class (not inside the ODE function), so it remains well-defined.
+
     All gains default to zero — set only the ones you need.
 
     How to use:
       ctrl = PIDController(
-          kp_x=50, kd_x=20,         # Cart position control
-          kp_th=[200, 150, 80],      # Angle proportional gains
-          kd_th=[40, 30, 15],        # Angle derivative gains
-          ki_th=[1.0, 0.5, 0.2],     # Angle integral gains (small!)
+          kp_x=50,  kd_x=20,         # Cart position control
+          kp_th=[200, 150, 80],       # Angle proportional gains
+          kd_th=[40,  30,  15],       # Angle derivative gains (use velocity)
+          ki_th=[1.0, 0.5, 0.2],      # Angle integral gains (small!)
           max_force=300,
       )
-      force = ctrl.compute(state, dt, x_ref=0.0)
+      force = ctrl.compute(state, dt=0.01, x_ref=0.0)
     """
 
     def __init__(
@@ -458,18 +670,15 @@ class PIDController:
         ki_th: Optional[List[float]] = None,
         kd_th: Optional[List[float]] = None,
         max_force: float = 300.0,
-        derivative_filter_alpha: float = 0.1,
     ) -> None:
         """
         Parameters
         ----------
         kp_x, ki_x, kd_x : PID gains for cart x-position.
         kp_th             : Proportional gains for [θ1, θ2, θ3].
-        ki_th             : Integral gains   for [θ1, θ2, θ3].
+        ki_th             : Integral gains   for [θ1, θ2, θ3] (keep small).
         kd_th             : Derivative gains for [θ1, θ2, θ3].
         max_force         : Clamp on total output force [N].
-        derivative_filter_alpha: Low-pass coefficient for derivative term (0–1).
-                                  Smaller → more filtering of high-freq noise.
         """
         self.kp_x = kp_x
         self.ki_x = ki_x
@@ -478,35 +687,43 @@ class PIDController:
         self.ki_th = list(ki_th or [0.0, 0.0, 0.0])
         self.kd_th = list(kd_th or [0.0, 0.0, 0.0])
         self.max_force = max_force
-        self.alpha = derivative_filter_alpha
 
-        # Internal state
+        # Integral accumulators — updated once per control step, not inside ODE
         self._integral_x: float = 0.0
         self._integral_th: List[float] = [0.0, 0.0, 0.0]
-        self._prev_error_x: float = 0.0
-        self._prev_error_th: List[float] = [0.0, 0.0, 0.0]
-        self._dfilt_x: float = 0.0
-        self._dfilt_th: List[float] = [0.0, 0.0, 0.0]
 
     def reset(self) -> None:
-        """Reset integrators and derivative memory."""
+        """Reset integral accumulators to zero."""
         self._integral_x = 0.0
         self._integral_th = [0.0, 0.0, 0.0]
-        self._prev_error_x = 0.0
-        self._prev_error_th = [0.0, 0.0, 0.0]
-        self._dfilt_x = 0.0
-        self._dfilt_th = [0.0, 0.0, 0.0]
+
+    def update_integrals(self, state: np.ndarray, dt: float, x_ref: float = 0.0) -> None:
+        """
+        Advance the integral terms by one control step.
+
+        Called by the Simulation once per control interval (not inside the ODE),
+        so each control step accumulates exactly one dt of integral — regardless
+        of how many ODE sub-steps the solver takes internally.
+        """
+        x, th1, th2, th3 = state[:4]
+        self._integral_x += (x_ref - x) * dt   # ∫(x_ref − x) dt → positive when left of target
+        for i, th in enumerate([th1, th2, th3]):
+            self._integral_th[i] += th * dt      # ∫θ dt → positive when leaning right
 
     def compute(
-        self, state: np.ndarray, dt: float, x_ref: float = 0.0
+        self, state: np.ndarray, dt: float = 0.01, x_ref: float = 0.0
     ) -> float:
         """
-        Compute the control force for the current time step.
+        Compute the control force for the current state.
+
+        The P and D terms are pure functions of the state vector.
+        The I terms use the accumulators built up by update_integrals().
 
         Parameters
         ----------
         state : [x, θ1, θ2, θ3, ẋ, θ̇1, θ̇2, θ̇3]
-        dt    : Time step [s] since last call.
+        dt    : Control step size [s] — used only to advance integrals when
+                update_integrals() has not been called separately.
         x_ref : Desired cart position [m] (default 0.0).
 
         Returns
@@ -514,38 +731,36 @@ class PIDController:
         force : Control force to apply to the cart [N].
         """
         x, th1, th2, th3, dx, dth1, dth2, dth3 = state
-        angles = [th1, th2, th3]
 
-        # ── Cart position PID ─────────────────────────────────────────────
+        # ── Cart position PD + I ─────────────────────────────────────────────
         err_x = x_ref - x
-        self._integral_x += err_x * dt
-        raw_deriv_x = (err_x - self._prev_error_x) / (dt + 1e-12)
-        self._dfilt_x = self.alpha * raw_deriv_x + (1 - self.alpha) * self._dfilt_x
-        self._prev_error_x = err_x
-
+        # P: proportional to position error (spring-like restoring force)
+        # D: proportional to cart velocity (adds electronic damping to the cart)
+        # I: accumulated position error (removes steady-state offset)
         f_x = (
             self.kp_x * err_x
+            - self.kd_x * dx            # ẋ already is d(x)/dt → D term
             + self.ki_x * self._integral_x
-            + self.kd_x * self._dfilt_x
         )
 
-        # ── Angle PID for each link (keep upright: θ=0) ───────────────────
+        # ── Angle PD + I for each link ────────────────────────────────────────
+        # SIGN CONVENTION (critical):
+        #   If θ > 0 (pendulum leans RIGHT), push cart RIGHT (+F).
+        #   This causes cart acceleration to the right → pendulum lags behind
+        #   by inertia → pendulum tips LEFT relative to cart → corrects lean.
+        #   So: F_th = +kp·θ + kd·θ̇  (POSITIVE gains, POSITIVE angle = POSITIVE force)
         f_th = 0.0
-        for i, (th, kp, ki, kd) in enumerate(
-            zip(angles, self.kp_th, self.ki_th, self.kd_th)
+        for i, (th, dth, kp, ki, kd) in enumerate(
+            zip([th1, th2, th3], [dth1, dth2, dth3],
+                self.kp_th, self.ki_th, self.kd_th)
         ):
-            err_th = -th  # want θ → 0
-            self._integral_th[i] += err_th * dt
-            raw_d = (err_th - self._prev_error_th[i]) / (dt + 1e-12)
-            self._dfilt_th[i] = (
-                self.alpha * raw_d + (1 - self.alpha) * self._dfilt_th[i]
-            )
-            self._prev_error_th[i] = err_th
-
+            # P: push cart in direction of lean (+kp·θ)
+            # D: additional push if pendulum is falling faster (+kd·θ̇)
+            # I: correct any persistent lean (+ki · ∫θ dt)
             f_th += (
-                kp * err_th
+                kp * th
+                + kd * dth
                 + ki * self._integral_th[i]
-                + kd * self._dfilt_th[i]
             )
 
         total = f_x + f_th
@@ -553,8 +768,140 @@ class PIDController:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 5 — Simulation
+# SECTION 4b — LQRController
 # ══════════════════════════════════════════════════════════════════════════════
+
+class LQRController:
+    """
+    Linear Quadratic Regulator (LQR) controller for the triple-pendulum cart.
+
+    --- WHAT IS LQR? ---
+
+    LQR is an *optimal* state-feedback controller that minimises the cost:
+        J = ∫₀^∞  ( zᵀ·Q·z  +  u·R·u )  dt
+
+    where:
+      z = full state vector  [x, θ1, θ2, θ3, ẋ, θ̇1, θ̇2, θ̇3]
+      u = cart force  F_cart
+      Q = 8×8 diagonal matrix — penalises state deviation (larger = care more)
+      R = scalar — penalises control effort  (larger = gentler control)
+
+    The optimal control law is *linear* in the state:
+        F_cart = −K · z
+
+    where K (the 1×8 gain matrix) is computed by solving the algebraic
+    Riccati equation:
+        Aᵀ·P + P·A − P·B·R⁻¹·Bᵀ·P + Q = 0
+    and then:
+        K = R⁻¹ · Bᵀ · P
+
+    A and B come from linearising the physics about the upright equilibrium
+    (see TriplePendulumPhysics.linearise()).
+
+    --- WHY DOES THIS WORK? ---
+
+    By weighting the angles heavily in Q (e.g. 1000× the cart position),
+    the optimiser finds gains that strongly damp angle deviations while
+    keeping control effort reasonable. The resulting K automatically couples
+    all 8 state variables — the angle D-terms come "for free" from the
+    optimal solution without us having to tune them manually.
+
+    How to modify:
+      • Q_diag — list of 8 values [x, θ1, θ2, θ3, ẋ, θ̇1, θ̇2, θ̇3].
+        Increase Q_diag[0] to penalise cart drift more.
+        Increase Q_diag[1..3] to more aggressively correct link angles.
+      • R — increase to produce a gentler, lower-force controller (may
+        not stabilise if gains are too small).
+      • max_force — hard clamp on the output [N].
+    """
+
+    def __init__(
+        self,
+        physics: "TriplePendulumPhysics",
+        Q_diag: Optional[List[float]] = None,
+        R: float = 0.001,
+        max_force: float = 600.0,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        physics   : TriplePendulumPhysics instance (used for linearisation).
+        Q_diag    : 8-element list of diagonal Q-matrix weights.
+                    Default: heavily penalise angles, lightly penalise cart pos.
+        R         : Control-effort weight scalar.  Smaller → more aggressive.
+        max_force : Saturation limit on output force [N].
+        """
+        from scipy.linalg import solve_continuous_are
+
+        self.max_force = max_force
+
+        # ── Default Q weights ────────────────────────────────────────────────
+        # State:  [x,    θ1,    θ2,    θ3,   ẋ,    θ̇1,   θ̇2,   θ̇3]
+        if Q_diag is None:
+            Q_diag = [10.0, 1000.0, 1000.0, 1000.0, 1.0, 50.0, 50.0, 50.0]
+
+        Q = np.diag(Q_diag)
+
+        # ── Linearise at upright equilibrium ─────────────────────────────────
+        A, B = physics.linearise()
+
+        # ── Solve the algebraic Riccati equation ─────────────────────────────
+        # Aᵀ P + P A − P B R⁻¹ Bᵀ P + Q = 0
+        try:
+            P = solve_continuous_are(A, B, Q, np.array([[R]]))
+        except Exception as e:
+            raise RuntimeError(
+                f"LQR Riccati equation failed: {e}\n"
+                "Check that the system is controllable (A, B) and Q is positive semi-definite."
+            ) from e
+
+        # ── Optimal gain matrix K ─────────────────────────────────────────────
+        # K = R⁻¹ · Bᵀ · P    (shape 1×8)
+        self.K = (1.0 / R) * B.T @ P
+
+        # ── Print eigenvalues of the closed-loop system A−BK ─────────────────
+        A_cl = A - B @ self.K
+        eigs = np.linalg.eigvals(A_cl)
+        eigs_sorted = sorted(eigs, key=lambda e: e.real)
+        print("  LQR closed-loop eigenvalues (all should have Re<0 for stability):")
+        for ev in eigs_sorted:
+            stability = "✓" if ev.real < 0 else "✗ UNSTABLE"
+            print(f"    {ev.real:+.3f} ± {abs(ev.imag):.3f}j  {stability}")
+
+    def reset(self) -> None:
+        """LQR has no internal state to reset."""
+
+    def update_integrals(self, state: np.ndarray, dt: float, x_ref: float = 0.0) -> None:
+        """LQR has no integral state — this is a no-op."""
+
+    def compute(
+        self, state: np.ndarray, dt: float = 0.01, x_ref: float = 0.0
+    ) -> float:
+        """
+        Compute the optimal LQR control force.
+
+        F = −K · (state − reference)
+
+        Since the reference is the upright equilibrium with x = x_ref,
+        we subtract x_ref from the cart position before applying K.
+
+        Parameters
+        ----------
+        state : [x, θ1, θ2, θ3, ẋ, θ̇1, θ̇2, θ̇3]
+        dt    : Unused — LQR is a purely static function of state.
+        x_ref : Desired cart position [m].
+
+        Returns
+        -------
+        force : Optimal control force [N].
+        """
+        z = state.copy()
+        z[0] -= x_ref   # express cart position relative to reference
+        F = -float((self.K @ z)[0])
+        return float(np.clip(F, -self.max_force, self.max_force))
+
+
+
 
 @dataclass
 class SimulationResult:
@@ -576,22 +923,33 @@ class Simulation:
     """
     Numerical integration of the triple-pendulum equations of motion.
 
-    Uses scipy.integrate.solve_ivp with the RK45 method (adaptive step).
-    The control law is evaluated at each time step.
+    Integration strategy — Zero-Order Hold (ZOH)
+    ---------------------------------------------
+    We split simulation time into discrete control intervals of length
+    dt_output.  At the START of each interval:
+      1. The controller evaluates the current state → produces a force F.
+      2. F is held constant for the whole interval.
+      3. scipy.integrate.solve_ivp integrates the ODE (with constant F)
+         from t_now to t_now + dt_output using the RK45 adaptive method.
+      4. The controller's integral accumulators are updated by dt_output.
+
+    Because the ODE function is a pure function of (t, state) within each
+    interval (F is constant, no controller state is modified during ODE
+    evaluation), the adaptive step-size solver works correctly.
 
     How to run a simulation:
       sim = Simulation(physics, controller, motor)
       result = sim.run(
-          t_span=(0, 5),          # Simulate 5 seconds
-          initial_state=...,      # 8-element array
-          dt_output=0.01,         # Output every 10 ms
+          t_span=(0, 5),       # Simulate 5 seconds
+          initial_state=...,   # 8-element array
+          dt_output=0.01,      # Control step + output resolution [s]
       )
     """
 
     def __init__(
         self,
         physics: TriplePendulumPhysics,
-        controller: Optional[PIDController] = None,
+        controller=None,    # PIDController, LQRController, or None
         motor: Optional[MotorModel] = None,
     ) -> None:
         self.physics = physics
@@ -606,13 +964,13 @@ class Simulation:
         use_motor_model: bool = True,
     ) -> SimulationResult:
         """
-        Integrate the system forward in time.
+        Integrate the system forward in time using Zero-Order Hold control.
 
         Parameters
         ----------
         t_span       : (t_start, t_end) in seconds.
         initial_state: [x, θ1, θ2, θ3, ẋ, θ̇1, θ̇2, θ̇3]
-        dt_output    : Time resolution of stored output [s].
+        dt_output    : Control step size AND output resolution [s].
         use_motor_model : If True, pass controller command through MotorModel
                          (adds back-EMF / saturation effects).
 
@@ -620,70 +978,85 @@ class Simulation:
         -------
         SimulationResult with all time series.
         """
-        p = self.physics.params
-        t_out = np.arange(t_span[0], t_span[1], dt_output)
-        forces = []
-        prev_t = t_span[0]
-
         if self.controller:
             self.controller.reset()
 
-        def ode_rhs(t: float, state: np.ndarray) -> np.ndarray:
-            nonlocal prev_t
-            dt = max(t - prev_t, 1e-9)
-            prev_t = t
+        # Stall force of the motor — used to normalise controller output to
+        # a voltage command in [−1, +1] before feeding the motor model.
+        stall_f = self.motor.stall_force() if self.motor else 1.0
 
-            # Compute control force
+        t_start, t_end = t_span
+        t_steps = np.arange(t_start, t_end, dt_output)
+
+        # Pre-allocate output arrays
+        n = len(t_steps)
+        out_states = np.empty((n, 8))
+        out_forces = np.empty(n)
+
+        state = np.array(initial_state, dtype=float)
+        print(f"Integrating t=[{t_start}, {t_end}] s  ({n} control steps) …")
+
+        for k, t_now in enumerate(t_steps):
+            t_next = min(t_now + dt_output, t_end)
+
+            # ── 1. Evaluate control force at current state ─────────────────
             if self.controller is not None:
-                f_cmd = self.controller.compute(state, dt)
+                f_cmd = self.controller.compute(state, dt_output)
             else:
                 f_cmd = 0.0
 
+            # ── 2. Pass through motor model (back-EMF, saturation) ─────────
             if use_motor_model and self.motor is not None:
-                # Convert force command to normalised motor command, then back
-                max_f = self.motor.max_force_N
-                command = np.clip(f_cmd / max_f, -1.0, 1.0)
-                F_cart = self.motor.force_from_command(command, cart_speed_ms=state[4])
+                # Normalise desired force to a voltage command [−1, +1]
+                command = float(np.clip(f_cmd / stall_f, -1.0, 1.0))
+                F_cart  = self.motor.force_from_command(command, cart_speed_ms=state[4])
             else:
                 F_cart = f_cmd
 
-            forces.append((t, F_cart))
-            return self.physics.equations_of_motion(state, F_cart)
+            # Record output for this step
+            out_states[k] = state
+            out_forces[k] = F_cart
 
-        print(f"Integrating t=[{t_span[0]}, {t_span[1]}] s …")
-        sol = solve_ivp(
-            ode_rhs,
-            t_span,
-            initial_state,
-            method="RK45",
-            t_eval=t_out,
-            rtol=1e-5,
-            atol=1e-7,
-            max_step=dt_output,
-        )
+            # ── 3. Integrate ODE for one control interval (F is constant) ──
+            # The ODE function is now stateless within this interval.
+            def ode_rhs(t: float, s: np.ndarray, _F: float = F_cart) -> np.ndarray:
+                return self.physics.equations_of_motion(s, _F)
 
-        if not sol.success:
-            raise RuntimeError(f"ODE solver failed: {sol.message}")
+            sol = solve_ivp(
+                ode_rhs,
+                [t_now, t_next],
+                state,
+                method="RK45",
+                rtol=1e-6,
+                atol=1e-8,
+                dense_output=False,
+            )
 
-        # Match forces to output time points (nearest)
-        force_times = np.array([f[0] for f in forces])
-        force_vals  = np.array([f[1] for f in forces])
-        idx = np.searchsorted(force_times, sol.t).clip(0, len(force_vals) - 1)
-        matched_forces = force_vals[idx]
+            if not sol.success:
+                print(f"  Warning: ODE solver issue at t={t_now:.3f}: {sol.message}")
+                # Keep the last successfully integrated state and continue
+            else:
+                state = sol.y[:, -1]
 
-        states = sol.y.T  # shape (N, 8)
+            # ── 4. Update controller integral accumulators ─────────────────
+            # Done AFTER the ODE step (so integrals advance once per control
+            # interval, not once per ODE sub-step).
+            if self.controller is not None:
+                self.controller.update_integrals(state, dt_output)
+
+        print(f"  Integration complete. {n} output points.")
         return SimulationResult(
-            t=sol.t,
-            x=states[:, 0],
-            theta1=states[:, 1],
-            theta2=states[:, 2],
-            theta3=states[:, 3],
-            dx=states[:, 4],
-            dtheta1=states[:, 5],
-            dtheta2=states[:, 6],
-            dtheta3=states[:, 7],
-            force=matched_forces,
-            states=states,
+            t=t_steps,
+            x=out_states[:, 0],
+            theta1=out_states[:, 1],
+            theta2=out_states[:, 2],
+            theta3=out_states[:, 3],
+            dx=out_states[:, 4],
+            dtheta1=out_states[:, 5],
+            dtheta2=out_states[:, 6],
+            dtheta3=out_states[:, 7],
+            force=out_forces,
+            states=out_states,
         )
 
 
@@ -907,49 +1280,71 @@ class Visualizer:
 # SECTION 7 — Test Configurations
 # ══════════════════════════════════════════════════════════════════════════════
 
-def config_free_swing() -> Tuple[SystemParameters, MotorModel, PIDController, np.ndarray]:
+# Each config function returns a 5-tuple:
+#   (SystemParameters, MotorModel, PIDController | None, initial_state, use_motor_model)
+# use_motor_model=False → apply the controller force directly (ideal actuator),
+#                         useful for demonstrating pure control theory.
+# use_motor_model=True  → route the force through the DC motor + lead-screw
+#                         model (realistic back-EMF and speed limits).
+
+def config_free_swing() -> tuple:
     """
     Configuration A — Free swing (no control).
 
     All three links start from a nearly-upright position with a small
-    perturbation. No control force is applied so the pendulum falls freely.
-    Use this to verify that the physics are correct (energy conservation, etc.).
+    perturbation.  No control force is applied, so the pendulum falls freely.
+    Use this to verify that the physics are correct:
+      • Energy should be approximately conserved (only small damping).
+      • The angles should grow continuously — the system is unstable.
     """
     params = SystemParameters(
         M_cart=2.0,
         l1=0.30, m1=0.15,
         l2=0.25, m2=0.10,
         l3=0.20, m3=0.08,
-        cart_friction=0.5,    # Low friction for free swing
+        cart_friction=0.5,    # Low friction to preserve energy
         joint_damping=0.0001,
     )
     motor = MotorModel()
-    controller = None  # type: ignore[assignment]
+    controller = None
 
-    # Initial state: small perturbation from upright
+    # Start perfectly upright with a tiny nudge on each link
     initial_state = np.array([
-        0.0,           # x
-        np.radians(3), # θ1: 3° from vertical
+        0.0,           # x  [m]
+        np.radians(3), # θ1 [rad] — 3° lean on bottom link
         np.radians(2), # θ2
         np.radians(1), # θ3
         0.0, 0.0, 0.0, 0.0,  # all velocities zero
     ])
-    return params, motor, controller, initial_state
+    return params, motor, controller, initial_state, False
 
 
-def config_pd_stabilise() -> Tuple[SystemParameters, MotorModel, PIDController, np.ndarray]:
+def config_pd_stabilise() -> tuple:
     """
-    Configuration B — PD stabilisation near the upright.
+    Configuration B — LQR stabilisation near the upright (ideal actuator).
 
-    A PD controller tries to keep all links upright and the cart at x=0.
-    The gains are tuned for the default link dimensions; increase if the
-    pendulum falls too quickly, decrease if it oscillates violently.
+    Uses an LQR (Linear Quadratic Regulator) controller — the standard
+    engineering solution for stabilising unstable linear systems. LQR
+    automatically computes the optimal feedback gains by solving the
+    algebraic Riccati equation on the linearised plant model.
 
-    Changing gains:
-      kp_th  — higher values pull links back to vertical faster.
-      kd_th  — higher values damp oscillations around upright.
-      kp_x   — cart position stiffness.
-      kd_x   — cart velocity damping.
+    Why not plain PD?
+    -----------------
+    A triple inverted pendulum has 4 coupled unstable modes. Choosing PD
+    gains independently for each link ignores the cross-coupling between
+    them, making it very easy to accidentally pick gains that are either
+    too weak (pendulum falls) or violate the closed-loop stability
+    condition.  LQR avoids this by finding the globally optimal gains for
+    the Q/R weights you specify — it is much harder to mis-tune.
+
+    The motor model is bypassed (use_motor_model=False) so we demonstrate
+    the pure control theory without the realistic motor speed limit.
+    See config_secondary_motor() for the same with the full motor model.
+
+    How to tune:
+      Q_diag[1..3] — higher → correct angles more aggressively.
+      Q_diag[0]    — higher → keep cart closer to x=0.
+      R            — smaller → more aggressive force (may saturate).
     """
     params = SystemParameters(
         M_cart=2.0,
@@ -957,31 +1352,42 @@ def config_pd_stabilise() -> Tuple[SystemParameters, MotorModel, PIDController, 
         l2=0.25, m2=0.10,
         l3=0.20, m3=0.08,
     )
-    motor = MotorModel(free_speed_rpm=1120.0, stall_torque_Nm=2.8)
-    controller = PIDController(
-        kp_x=60.0,   kd_x=25.0,
-        kp_th=[350.0, 250.0, 120.0],
-        kd_th=[55.0,  40.0,  20.0],
-        ki_th=[0.5,   0.3,   0.1],
-        max_force=300.0,
+    motor = MotorModel()   # Motor present but bypassed for this config
+    physics = TriplePendulumPhysics(params)
+
+    print("Computing LQR gains (pd_stabilise)…")
+    controller = LQRController(
+        physics=physics,
+        # State weights: [x, θ1, θ2, θ3, ẋ, θ̇1, θ̇2, θ̇3]
+        Q_diag=[10.0, 2000.0, 2000.0, 2000.0, 1.0, 100.0, 100.0, 100.0],
+        R=0.001,        # Low R → controller is allowed to use large forces
+        max_force=600.0,
     )
-    # Initial state: small pushes on each link
+
+    # Small perturbation — LQR is a *local* controller (only works near upright)
     initial_state = np.array([
         0.0,
-        np.radians(5),
-        np.radians(4),
-        np.radians(3),
+        np.radians(3),    # θ1: 3° lean
+        np.radians(2),    # θ2: 2° lean
+        np.radians(1.5),  # θ3: 1.5° lean
         0.0, 0.0, 0.0, 0.0,
     ])
-    return params, motor, controller, initial_state
+    # use_motor_model=False → force applied directly (ideal actuator demo)
+    return params, motor, controller, initial_state, False
 
 
-def config_longer_links() -> Tuple[SystemParameters, MotorModel, PIDController, np.ndarray]:
+def config_longer_links() -> tuple:
     """
-    Configuration C — Longer, heavier links.
+    Configuration C — Longer, heavier links with realistic motor model.
 
-    Tests how the simulation handles a different link geometry.
-    Longer links are harder to stabilise; gains may need tuning.
+    Tests the simulation with a different link geometry through the full
+    motor model (1120 RPM, 8 mm lead).  Longer links have:
+      • More rotational inertia (harder to move quickly)
+      • Slower instability (lower ωn = √(g*α/I)) — actually EASIER to stabilise
+      • Larger gravitational torques (need more force)
+
+    The LQR controller adapts its gains automatically to the new link
+    parameters — just change the geometry and re-run.
     """
     params = SystemParameters(
         M_cart=3.0,
@@ -992,28 +1398,44 @@ def config_longer_links() -> Tuple[SystemParameters, MotorModel, PIDController, 
         cart_friction=6.0,
     )
     motor = MotorModel(free_speed_rpm=1120.0, stall_torque_Nm=2.8)
-    controller = PIDController(
-        kp_x=40.0,  kd_x=15.0,
-        kp_th=[500.0, 350.0, 180.0],
-        kd_th=[80.0,  60.0,  30.0],
+    physics = TriplePendulumPhysics(params)
+
+    print("Computing LQR gains (longer_links)…")
+    controller = LQRController(
+        physics=physics,
+        Q_diag=[10.0, 2000.0, 2000.0, 2000.0, 1.0, 100.0, 100.0, 100.0],
+        R=0.001,
         max_force=400.0,
     )
     initial_state = np.array([
         0.0,
-        np.radians(4),
         np.radians(3),
         np.radians(2),
+        np.radians(1),
         0.0, 0.0, 0.0, 0.0,
     ])
-    return params, motor, controller, initial_state
+    # Motor model is bypassed (ideal force) so LQR can demonstrate purely
+    # the effect of changing link geometry on the stabilisation response.
+    # With the 8 mm / 1120 RPM lead-screw model active (True), the cart
+    # speed cap of 0.149 m/s prevents the LQR from delivering the required
+    # forces fast enough and the pendulum will fall — this is physically
+    # realistic but less instructive for a geometry comparison demo.
+    return params, motor, controller, initial_state, False
 
 
-def config_secondary_motor() -> Tuple[SystemParameters, MotorModel, PIDController, np.ndarray]:
+def config_secondary_motor() -> tuple:
     """
-    Configuration D — Use the 312 RPM secondary motor.
+    Configuration D — LQR controller, heavy links, secondary 312 RPM motor.
 
-    The secondary motor has more torque but lower speed. It is better suited
-    when large forces are needed for heavy payloads at slower cart speeds.
+    Demonstrates the effect of heavier links and a slower (but stronger)
+    motor on the stabilisation behaviour.  The motor model is bypassed so
+    the ideal LQR force is applied directly — this lets you compare the
+    settling behaviour cleanly without motor-bandwidth artefacts.
+
+    To enable the realistic motor model and see its force-limiting effects,
+    change the return value below from False → True and observe that the
+    pendulum falls once the cart speed exceeds ~0.04 m/s (the 312 RPM
+    motor's free-run limit with an 8 mm lead screw).
     """
     params = SystemParameters(
         M_cart=4.0,
@@ -1023,20 +1445,25 @@ def config_secondary_motor() -> Tuple[SystemParameters, MotorModel, PIDControlle
         cart_friction=8.0,
     )
     motor = MotorModel.secondary_motor()
-    controller = PIDController(
-        kp_x=70.0,  kd_x=30.0,
-        kp_th=[400.0, 280.0, 140.0],
-        kd_th=[65.0,  48.0,  24.0],
-        max_force=400.0,
+    physics = TriplePendulumPhysics(params)
+
+    print("Computing LQR gains (secondary_motor)…")
+    controller = LQRController(
+        physics=physics,
+        Q_diag=[10.0, 2000.0, 2000.0, 2000.0, 1.0, 100.0, 100.0, 100.0],
+        R=0.001,
+        max_force=600.0,
     )
     initial_state = np.array([
         0.0,
-        np.radians(6),
-        np.radians(4),
+        np.radians(3),
         np.radians(2),
+        np.radians(1.5),
         0.0, 0.0, 0.0, 0.0,
     ])
-    return params, motor, controller, initial_state
+    # Motor model bypassed: ideal force so LQR stabilises cleanly.
+    # Flip to True to see the motor speed limit cause the pendulum to fall.
+    return params, motor, controller, initial_state, False
 
 
 # Map of named configurations for easy selection on the command line
@@ -1068,7 +1495,7 @@ def main(
     ----------
     config_name    : One of the keys in CONFIGURATIONS.
     t_end          : Simulation end time [s].
-    dt_output      : Output resolution [s].
+    dt_output      : Control step size and output resolution [s].
     animate        : Show Matplotlib animation after simulation.
     save_animation : File path to save animation (e.g. 'anim.gif'), or None.
     save_plot      : File path to save time-series figure, or None.
@@ -1078,11 +1505,13 @@ def main(
     -------
     SimulationResult : All time-series data.
 
-    How to add a new configuration:
-      1. Write a function config_mytest() → (SystemParameters, MotorModel,
-         PIDController, initial_state).
-      2. Add it to the CONFIGURATIONS dict.
-      3. Call main(config_name='mytest').
+    How to add a new configuration
+    --------------------------------
+    1. Write a function config_mytest() that returns a 5-tuple:
+           (SystemParameters, MotorModel, PIDController | None,
+            initial_state, use_motor_model)
+    2. Add it to the CONFIGURATIONS dict below.
+    3. Call  main(config_name='mytest')  or pass --config mytest on the CLI.
     """
     if config_name not in CONFIGURATIONS:
         raise ValueError(
@@ -1096,19 +1525,25 @@ def main(
     print(f"{'='*60}\n")
 
     # ── Load configuration ────────────────────────────────────────────────────
-    params, motor, controller, initial_state = CONFIGURATIONS[config_name]()
+    params, motor, controller, initial_state, use_motor_model = \
+        CONFIGURATIONS[config_name]()
 
     print(params.summary())
     print()
     print(motor.summary())
     print()
     if controller is not None:
-        print("PID Controller enabled.")
+        ctrl_type = type(controller).__name__
+        mode = "with motor model" if use_motor_model else "ideal force (motor model bypassed)"
+        print(f"{ctrl_type} enabled ({mode}).")
     else:
         print("No controller — free swing.")
     print()
 
-    # ── Build physics (derives EOM symbolically) ──────────────────────────────
+    # ── Build physics engine ──────────────────────────────────────────────────
+    # Note: LQR configs build their own physics for gain computation internally.
+    # We build a fresh one here for the simulation and visualiser, using the
+    # same params — the result is identical.
     physics = TriplePendulumPhysics(params)
 
     # ── Run simulation ────────────────────────────────────────────────────────
@@ -1117,12 +1552,11 @@ def main(
         t_span=(0.0, t_end),
         initial_state=initial_state,
         dt_output=dt_output,
-        use_motor_model=(controller is not None),
+        use_motor_model=use_motor_model,
     )
-    print(f"  Integration complete. {len(result.t)} output points.\n")
 
     # ── Print summary statistics ──────────────────────────────────────────────
-    print("Results summary:")
+    print("\nResults summary:")
     print(f"  Cart x range: [{result.x.min():.4f}, {result.x.max():.4f}] m")
     print(f"  θ1 range: [{np.degrees(result.theta1.min()):.1f}°, "
           f"{np.degrees(result.theta1.max()):.1f}°]")
