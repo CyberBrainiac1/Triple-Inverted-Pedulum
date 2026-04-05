@@ -3,14 +3,14 @@ Triple Inverted Pendulum on a Cart — Physics Simulation
 ========================================================
 Hardware context
 ----------------
-  • Cart driven by a goBILDA lead-screw actuated by a 1120 RPM motor.
+  • Cart driven by a brushed DC lead-screw actuator (1120 RPM free-run, 2.8 N·m stall torque, 8 mm/rev lead).
   • A second 312 RPM motor is available as an optional extra actuator.
   • Three rigid links are mounted above the cart in series.
 
 Code structure
 --------------
   Section 1 — SystemParameters      : all physical constants you may want to tweak.
-  Section 2 — MotorModel            : goBILDA motor + lead-screw force model.
+  Section 2 — MotorModel            : brushed DC motor + lead-screw force model.
   Section 3 — TriplePendulumPhysics : Lagrangian equations of motion, derived by hand
                                       and implemented as fast NumPy arithmetic.
   Section 4 — PIDController         : simple PID with derivative filtering.
@@ -137,7 +137,7 @@ class SystemParameters:
 @dataclass
 class MotorModel:
     """
-    Models a goBILDA brushed DC motor driving a lead-screw cart actuator.
+    Models a brushed DC motor driving a lead-screw cart actuator.
 
     Physics
     -------
@@ -149,12 +149,12 @@ class MotorModel:
 
     How to modify:
       • free_speed_rpm  — motor no-load RPM (1120 for primary, 312 for secondary)
-      • stall_torque_Nm — motor stall torque (check goBILDA datasheet)
-      • lead_mm         — lead-screw lead in millimetres (goBILDA default: 8 mm)
+      • stall_torque_Nm — motor stall torque (N·m)
+      • lead_mm         — lead-screw lead in millimetres (default: 8 mm)
       • efficiency      — lead-screw mechanical efficiency (0–1)
     """
 
-    # Primary drive motor (goBILDA Yellow Jacket, ~1120 RPM variant)
+    # Primary drive motor (~1120 RPM free-run, 2.8 N·m stall torque)
     free_speed_rpm: float = 1120.0    # Free (no-load) speed [RPM]
     stall_torque_Nm: float = 2.8      # Stall torque [N·m]
 

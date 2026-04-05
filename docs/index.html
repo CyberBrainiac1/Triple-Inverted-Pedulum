@@ -301,7 +301,7 @@
       </p>
       <div class="info-box teal">
         <strong>Real hardware:</strong> This simulation models an actual
-        <strong>goBILDA lead-screw actuator</strong> (1120 RPM motor, 8 mm lead, 85%
+        <strong>brushed DC lead-screw actuator</strong> (1120 RPM free-run speed, 2.8 N·m stall torque, 8 mm/rev lead, 85%
         mechanical efficiency). The motor's torque-speed curve and back-EMF are included,
         so the physics directly reflect what the physical build can and cannot do.
       </div>
@@ -456,7 +456,7 @@ def equations_of_motion(state, F_cart):
     </div>
     <div class="step-body">
       <p>
-        The goBILDA Yellow Jacket brushed DC motor follows a simple
+        The primary brushed DC motor (1120 RPM free-run speed, 2.8 N·m stall torque) follows a simple
         <strong>linear torque-speed curve</strong>. The faster the cart already
         moves, the less force the motor can deliver (back-EMF effect).
         A lead screw then converts shaft rotation into linear cart force.
@@ -1058,7 +1058,7 @@ print(result.force)   # applied force time series [N]
         </tr>
         <tr>
           <td>Motor model</td>
-          <td>Translated goBILDA datasheet values into the torque-speed curve formula</td>
+          <td>Translated motor datasheet values (1120 RPM free-run, 2.8 N·m stall torque) into the torque-speed curve formula</td>
           <td>Confirmed lead-screw efficiency figure; identified the back-EMF speed limitation</td>
         </tr>
         <tr>
@@ -1107,7 +1107,7 @@ print(result.force)   # applied force time series [N]
 
 <!-- ═══════════════════ FOOTER ═══════════════════ -->
 <footer>
-  Triple Inverted Pendulum on a Cart — goBILDA lead-screw build &nbsp;|&nbsp;
+  Triple Inverted Pendulum on a Cart — brushed DC lead-screw build &nbsp;|&nbsp;
   <a href="https://github.com/CyberBrainiac1/Triple-Inverted-Pedulum">GitHub repo</a>
 </footer>
 
