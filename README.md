@@ -1,6 +1,6 @@
 # Triple Inverted Pendulum on a Cart — Physics Simulation
 
-A self-contained Python simulation of a **triple inverted pendulum on a motorised cart**, complete with Lagrangian physics, an LQR stabilising controller, a GoBilda lead-screw motor model, and a Matplotlib animation.
+A self-contained Python simulation of a **triple inverted pendulum on a motorised cart**, complete with Lagrangian physics, an LQR stabilising controller, a brushed DC lead-screw motor model, and a Matplotlib animation.
 
 ---
 
@@ -32,7 +32,7 @@ python triple_pendulum_simulation.py --help
    - [Gravity vector G(q)](#gravity-vector-gq)
    - [Putting it together — the equation of motion](#putting-it-together)
    - [Damping](#damping)
-3. [Motor model — GoBilda lead screw](#motor-model)
+3. [Motor model — brushed DC lead screw](#motor-model)
 4. [Control — PID and LQR](#control)
    - [PID controller (manual tuning)](#pid-controller)
    - [LQR controller (automatic optimal gains)](#lqr-controller)
@@ -63,7 +63,7 @@ python triple_pendulum_simulation.py --help
 
 - The **cart** slides left and right along a horizontal rail.
 - **Three rigid links** are connected end-to-end above the cart, each free to rotate at its lower pivot.
-- A **GoBilda lead-screw motor** pushes the cart; the controller decides how hard and in which direction.
+- A **brushed DC lead-screw motor** pushes the cart; the controller decides how hard and in which direction.
 - All three links start near the upright (balanced) position. Without control they immediately fall over — the system is naturally unstable. With an LQR controller the pendulum is held upright.
 
 ---
@@ -216,7 +216,7 @@ Both oppose motion (negative sign in the EOM). Set them to zero for a perfectly 
 
 ## Motor model
 
-The cart is driven by a **GoBilda Yellow Jacket** brushed DC motor connected to a **lead screw** (a threaded rod that converts rotation into linear motion).
+The cart is driven by a **brushed DC motor** (1120 RPM free-run speed, 2.8 N·m stall torque) connected to a **lead screw** (a threaded rod that converts rotation into linear motion).
 
 ### DC motor torque-speed curve
 
@@ -246,7 +246,7 @@ F_cart  =  τ · (2π / lead_m) · η
 
 | Symbol | Meaning |
 |--------|---------|
-| `lead_m` | Lead of the screw in metres/revolution (GoBilda default: 8 mm = 0.008 m) |
+| `lead_m` | Lead of the screw in metres/revolution (default: 8 mm = 0.008 m) |
 | `η` | Mechanical efficiency (accounts for thread friction, default 0.85) |
 
 The factor `2π / lead_m` converts rotational torque [N·m] to linear force [N].

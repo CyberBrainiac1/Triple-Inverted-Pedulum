@@ -127,6 +127,8 @@
       margin: 0.5rem 0 0;
       font-size: 0.88rem;
       line-height: 1.6;
+      overflow-x: auto;
+      max-width: 100%;
     }
 
     /* ── Diagram ─────────────────────────────────────────────────────────── */
@@ -173,6 +175,10 @@
       font-size: 0.9rem;
       color: var(--green);
       margin: 0.25rem 0.25rem;
+      max-width: 100%;
+      overflow-x: auto;
+      overflow-wrap: break-word;
+      white-space: pre-wrap;
     }
 
     /* ── Footer ──────────────────────────────────────────────────────────── */
@@ -193,6 +199,65 @@
       color: var(--muted);
       margin: 2.5rem 0 1rem;
     }
+
+    /* ── Mobile adjustments (≤ 600 px) ──────────────────────────────────── */
+    @media (max-width: 600px) {
+      header { padding: 2rem 1rem 1.5rem; }
+      header p { font-size: 0.97rem; }
+
+      main { padding: 1.5rem 0.9rem 3rem; }
+
+      .step-header { padding: 0.9rem 1rem; gap: 0.75rem; }
+      .step-header h2 { font-size: 1rem; }
+
+      .step-body { padding: 1rem; }
+      .step-body p,
+      .step-body ul { font-size: 0.9rem; }
+
+      pre[class*="language-"] { font-size: 0.78rem; }
+
+      .diagram { font-size: 0.75rem; padding: 0.9rem 1rem; }
+
+      .run-box { padding: 1rem; }
+      .run-box code { font-size: 0.8rem; display: block; margin: 0.35rem 0; }
+
+      .pill { font-size: 0.78rem; }
+    }
+
+    /* ── Info / callout boxes ─────────────────────────────────────────────── */
+    .info-box {
+      background: var(--surface);
+      border-left: 3px solid var(--accent);
+      border-radius: 0 8px 8px 0;
+      padding: 0.9rem 1.2rem;
+      margin: 0.75rem 0 1rem;
+      font-size: 0.92rem;
+      color: var(--text);
+    }
+    .info-box.teal   { border-left-color: var(--accent2); }
+    .info-box.green  { border-left-color: var(--green); }
+    .info-box.yellow { border-left-color: var(--yellow); }
+    .info-box.orange { border-left-color: var(--orange); }
+
+    /* ── Responsive tables ────────────────────────────────────────────────── */
+    .table-wrap { overflow-x: auto; margin-bottom: 1rem; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+    th, td { border: 1px solid var(--border); padding: 0.45rem 0.8rem; text-align: left; }
+    th { background: var(--surface); color: var(--accent); font-weight: 600; }
+    tr:nth-child(even) { background: rgba(255,255,255,0.02); }
+
+    /* ── Code flow diagram ────────────────────────────────────────────────── */
+    .flow { display: flex; flex-direction: column; align-items: stretch; margin-bottom: 1rem; }
+    .flow-step {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.55rem 1rem;
+      font-size: 0.88rem;
+      color: var(--text);
+    }
+    .flow-arrow { text-align: center; color: var(--muted); font-size: 1.1rem; line-height: 1.6; }
+    .flow-step code { color: var(--accent2); background: transparent; padding: 0; font-size: 0.88rem; }
   </style>
 </head>
 
@@ -206,6 +271,49 @@
 
 <!-- ═══════════════════ MAIN ═══════════════════ -->
 <main>
+
+  <!-- ─────────────────── BACKGROUND ─────────────────── -->
+  <p class="section-label">Background — What &amp; why</p>
+  <div class="step">
+    <div class="step-header">
+      <span class="step-num orange">●</span>
+      <h2>What is a triple inverted pendulum, and why is it hard?</h2>
+    </div>
+    <div class="step-body">
+      <p>
+        A regular pendulum hangs <em>downward</em> — give it a nudge and gravity passively
+        pulls it back to centre. Flip it upside-down and gravity does the opposite: it amplifies
+        any small lean, making it grow exponentially. This is called an <strong>actively unstable</strong>
+        equilibrium. Now stack <em>three</em> such links end-to-end above a motorised cart and you
+        have one of the most challenging benchmark problems in control engineering.
+      </p>
+      <div class="pills">
+        <span class="pill"><strong>4</strong> degrees of freedom</span>
+        <span class="pill"><strong>3</strong> coupled unstable modes</span>
+        <span class="pill"><strong>single</strong> control input (cart force F)</span>
+        <span class="pill"><strong>exponential</strong> divergence without control</span>
+      </div>
+      <p>
+        A 3° initial lean at the top link will cause the tip to pass 90° in roughly
+        <strong>0.3 seconds</strong> — faster than human reaction time. The only practical
+        stabilisation strategy is a computer-calculated optimal gain matrix (LQR), applied at
+        100 Hz.
+      </p>
+      <div class="info-box teal">
+        <strong>Real hardware:</strong> This simulation models an actual
+        <strong>brushed DC lead-screw actuator</strong> (1120 RPM free-run speed, 2.8 N·m stall torque, 8 mm/rev lead, 85%
+        mechanical efficiency). The motor's torque-speed curve and back-EMF are included,
+        so the physics directly reflect what the physical build can and cannot do.
+      </div>
+      <p>
+        The <strong>Lagrangian method</strong> is used to derive the equations of motion.
+        Instead of drawing free-body diagrams and tracking every contact force at every pivot,
+        we write expressions for the total kinetic and potential energy of the system and apply
+        one master formula — the Euler-Lagrange equation — which automatically produces all
+        four equations of motion.
+      </p>
+    </div>
+  </div>
 
   <!-- Quick diagram -->
   <div class="diagram">      ●  ← tip of link 3
@@ -287,7 +395,7 @@ state = [x, theta1, theta2, theta3,
       <p>
         After doing the calculus (see README for full derivation), the result is a
         compact matrix equation:
-        <br /><code style="color:var(--accent2)">M(q) · q̈ = F_ext − Coriolis(q, q̇) − Gravity(q) − Damping</code>
+        <br /><code style="color:var(--accent2);word-break:break-word;">M(q) · q̈ = F_ext − Coriolis(q, q̇) − Gravity(q) − Damping</code>
       </p>
       <ul>
         <li><strong>M(q)</strong> — 4×4 mass matrix (how inertia is spread across all joints)</li>
@@ -348,7 +456,7 @@ def equations_of_motion(state, F_cart):
     </div>
     <div class="step-body">
       <p>
-        The GoBilda Yellow Jacket brushed DC motor follows a simple
+        The primary brushed DC motor (1120 RPM free-run speed, 2.8 N·m stall torque) follows a simple
         <strong>linear torque-speed curve</strong>. The faster the cart already
         moves, the less force the motor can deliver (back-EMF effect).
         A lead screw then converts shaft rotation into linear cart force.
@@ -601,11 +709,396 @@ animate_pendulum(history)
 
       <p style="margin-top: 1rem;">
         The full implementation with all the maths filled in is in
-        <a href="https://github.com/CyberBrainiac1/Triple-Inverted-Pedulum/blob/copilot/create-triple-inverted-pendulum-simulation/triple_pendulum_simulation.py">
+        <a href="https://github.com/CyberBrainiac1/Triple-Inverted-Pedulum/blob/main/triple_pendulum_simulation.py">
           triple_pendulum_simulation.py</a>
-        (~1 350 lines, thoroughly commented).
-        The <a href="https://github.com/CyberBrainiac1/Triple-Inverted-Pedulum/blob/copilot/create-triple-inverted-pendulum-simulation/README.md">README</a>
+        (~1 640 lines, thoroughly commented).
+        The <a href="https://github.com/CyberBrainiac1/Triple-Inverted-Pedulum/blob/main/README.md">README</a>
         explains the physics step-by-step in plain English.
+      </p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ DEEP DIVE: MATHEMATICS ═══════════════════ -->
+  <p class="section-label">Deep dive — The mathematics</p>
+
+  <div class="step">
+    <div class="step-header">
+      <span class="step-num blue">∑</span>
+      <h2>Lagrangian mechanics — energy instead of forces</h2>
+    </div>
+    <div class="step-body">
+      <p>
+        The Lagrangian <code style="color:var(--accent2)">L = T − V</code> (kinetic minus
+        potential energy) encodes everything the equations of motion need. Applying the
+        Euler-Lagrange formula to each coordinate automatically produces all four equations
+        of motion — no contact forces at pivots, no constraint equations.
+      </p>
+
+      <p><strong>Kinetic energy T</strong> — each body contributes translational and rotational terms:</p>
+      <div class="diagram">T = ½ M_cart·ẋ²
+  + ½ m₁·(ẋ_cm1² + ẏ_cm1²)  +  ½ I₁·θ̇₁²
+  + ½ m₂·(ẋ_cm2² + ẏ_cm2²)  +  ½ I₂·θ̇₂²
+  + ½ m₃·(ẋ_cm3² + ẏ_cm3²)  +  ½ I₃·θ̇₃²
+
+where Iᵢ = mᵢ·lᵢ²/3  (uniform rod, rotating about one end)</div>
+
+      <p>
+        Each centre-of-mass velocity (ẋ_cmi, ẏ_cmi) depends on the cart motion ẋ <em>plus</em>
+        the rotation of every link below link i. This coupling is why the mass matrix has
+        off-diagonal entries — pushing the cart simultaneously accelerates all the links.
+      </p>
+
+      <p><strong>Potential energy V</strong> — only gravity, measured upward from the rail:</p>
+      <div class="diagram">V = m₁·g·(l₁/2)·cos θ₁
+  + m₂·g·(l₁·cos θ₁ + (l₂/2)·cos θ₂)
+  + m₃·g·(l₁·cos θ₁ + l₂·cos θ₂ + (l₃/2)·cos θ₃)</div>
+
+      <p>
+        At θ = 0 (perfectly upright), V is at a <em>maximum</em>. Any small lean lowers V,
+        releasing energy into angular velocity — this is the mathematical signature of
+        instability. Gravity is not a restoring force here; it is a destabilising one.
+      </p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-header">
+      <span class="step-num teal">M</span>
+      <h2>The 4×4 mass matrix — encoding inertia and coupling</h2>
+    </div>
+    <div class="step-body">
+      <p>
+        After expanding T and collecting terms grouped by pairs of generalised velocities,
+        the equations of motion take the compact form
+        <code style="color:var(--accent2);word-break:break-word;">M(q)·q̈ = Q − h − G − D</code>.
+        The symmetric 4×4 matrix M(q) encodes how every force and torque is distributed
+        across all four coordinates.
+      </p>
+
+      <p>Six constant coupling coefficients (pre-computed once from masses and lengths):</p>
+      <div class="table-wrap"><table>
+        <tr><th>Symbol</th><th>Formula</th><th>Physical meaning</th></tr>
+        <tr><td>α₁</td><td>m₁·(l₁/2) + (m₂+m₃)·l₁</td><td>Effective mass coupling cart translation to link 1 rotation</td></tr>
+        <tr><td>α₂</td><td>m₂·(l₂/2) + m₃·l₂</td><td>Effective mass coupling cart translation to link 2 rotation</td></tr>
+        <tr><td>α₃</td><td>m₃·(l₃/2)</td><td>Effective mass coupling cart translation to link 3 rotation</td></tr>
+        <tr><td>β₁₂</td><td>(m₂·(l₂/2) + m₃·l₂)·l₁</td><td>Coupling inertia between links 1 and 2</td></tr>
+        <tr><td>β₁₃</td><td>m₃·(l₃/2)·l₁</td><td>Coupling inertia between links 1 and 3</td></tr>
+        <tr><td>β₂₃</td><td>m₃·(l₃/2)·l₂</td><td>Coupling inertia between links 2 and 3</td></tr>
+      </table></div>
+
+      <p>Key entries of M (upper triangle only; matrix is symmetric):</p>
+      <div class="diagram">M[0,0] = M_cart + m₁ + m₂ + m₃          — total system mass (cart + all links)
+M[0,1] = α₁·cos θ₁                    — cart–link1 coupling
+M[0,2] = α₂·cos θ₂                    — cart–link2 coupling
+M[0,3] = α₃·cos θ₃                    — cart–link3 coupling
+
+M[1,1] = m₁·(l₁/2)² + I₁ + (m₂+m₃)·l₁²  — link1 self-inertia
+M[1,2] = β₁₂·cos(θ₁−θ₂)              — link1–link2 coupling
+M[1,3] = β₁₃·cos(θ₁−θ₃)              — link1–link3 coupling
+
+M[2,2] = m₂·(l₂/2)² + I₂ + m₃·l₂²       — link2 self-inertia
+M[2,3] = β₂₃·cos(θ₂−θ₃)              — link2–link3 coupling
+
+M[3,3] = m₃·(l₃/2)² + I₃                 — link3 self-inertia</div>
+
+      <p>
+        The cosine factors in the off-diagonal entries capture how the angle between adjacent
+        links determines how strongly they pull on each other. At large angles the coupling
+        decreases — but by then the linearised LQR controller is no longer valid.
+      </p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-header">
+      <span class="step-num green">h G</span>
+      <h2>Coriolis forces h(q,q̇) and gravity vector G(q)</h2>
+    </div>
+    <div class="step-body">
+      <p>
+        <strong>Coriolis / centrifugal vector h</strong> — arises when rotating links "fling"
+        each other sideways. Proportional to angular velocity <em>squared</em>, so it is
+        negligible near the upright (small θ̇) but significant during fast swings:
+      </p>
+      <div class="diagram">h[0] = −α₁·sin θ₁·θ̇₁²  −  α₂·sin θ₂·θ̇₂²  −  α₃·sin θ₃·θ̇₃²
+h[1] = +β₁₂·sin(θ₁−θ₂)·θ̇₂²  +  β₁₃·sin(θ₁−θ₃)·θ̇₃²
+h[2] = −β₁₂·sin(θ₁−θ₂)·θ̇₁²  +  β₂₃·sin(θ₂−θ₃)·θ̇₃²
+h[3] = −β₁₃·sin(θ₁−θ₃)·θ̇₁²  −  β₂₃·sin(θ₂−θ₃)·θ̇₂²</div>
+
+      <div class="info-box">
+        <strong>h[0]</strong> is the centripetal reaction on the cart: when any link spins,
+        its pivot sweeps outward, pushing the cart sideways. This is why the LQR must
+        continuously move the cart even when the angles are nearly zero.
+      </div>
+
+      <p>
+        <strong>Gravity vector G = ∂V/∂q</strong> — the torque gravity applies to each leaning link:
+      </p>
+      <div class="diagram">G[0] = 0                      — gravity is vertical; x position does not affect height
+G[1] = −α₁·g·sin θ₁         — gravity tips link 1 further over
+G[2] = −α₂·g·sin θ₂         — gravity tips link 2 further over
+G[3] = −α₃·g·sin θ₃         — gravity tips link 3 further over</div>
+
+      <p>
+        The <em>negative</em> signs mean: when θ > 0 (link leans right), G &lt; 0. In the
+        equation of motion M·q̈ = Q − h − <strong>G</strong> − D, subtracting a negative G
+        <em>adds</em> a positive angular acceleration — gravity makes things worse. This is
+        the mathematical definition of the instability.
+      </p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-header">
+      <span class="step-num yellow">K</span>
+      <h2>LQR: the optimal control law — from Riccati equation to gain matrix</h2>
+    </div>
+    <div class="step-body">
+      <p>LQR finds the gain matrix K that minimises a cost integral over all future time:</p>
+      <div class="diagram">J = ∫₀^∞ ( zᵀ·Q·z  +  u·R·u ) dt
+
+z = [x, θ₁, θ₂, θ₃, ẋ, θ̇₁, θ̇₂, θ̇₃]   (8-element state vector)
+u = F_cart                                   (single scalar control input)
+
+Q = 8×8 diagonal matrix  (state deviation penalties — you choose these)
+R = scalar               (control effort penalty — you choose this)</div>
+
+      <p>
+        Larger Q weights → controller reacts more aggressively to state deviations.
+        Larger R → gentler controller that uses less force (may fail to stabilise at large angles).
+      </p>
+
+      <p>
+        The physics is first <strong>linearised at the upright equilibrium</strong> (all
+        angles and velocities zero): sin θ ≈ θ, cos θ ≈ 1, Coriolis ≈ 0. This yields a
+        linear state-space model:
+      </p>
+      <div class="diagram">ż = A·z + B·u      (A is 8×8, B is 8×1 — both computed analytically)</div>
+
+      <p>
+        Then the <strong>algebraic Riccati equation</strong> is solved once (offline, before
+        the simulation starts):
+      </p>
+      <div class="diagram">Aᵀ·P + P·A  −  P·B·R⁻¹·Bᵀ·P  +  Q  =  0   →  solution P (8×8)
+
+Optimal gain matrix:  K = R⁻¹ · Bᵀ · P     (shape 1×8)</div>
+
+      <p>At every 10 ms control step, the force is computed in a single matrix multiply:</p>
+      <div class="diagram">F_cart = − K · z        (1×8 matrix times 8×1 vector = one scalar)</div>
+
+      <div class="info-box green">
+        <strong>Why LQR beats hand-tuned PD:</strong> A triple pendulum has four coupled
+        unstable modes. Tuning P and D gains independently for each link ignores
+        cross-coupling and easily violates global stability conditions. LQR finds the
+        globally optimal gains for the chosen Q and R in one calculation — and always
+        produces a provably stable controller as long as the system is controllable. Stability
+        is verified by checking that all eigenvalues of the closed-loop matrix A−B·K have
+        negative real parts.
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ CODE ARCHITECTURE ═══════════════════ -->
+  <p class="section-label">The code</p>
+
+  <div class="step">
+    <div class="step-header">
+      <span class="step-num blue">{ }</span>
+      <h2>Python code architecture — eight sections in one file</h2>
+    </div>
+    <div class="step-body">
+      <p>
+        The entire simulation lives in a single file
+        <a href="https://github.com/CyberBrainiac1/Triple-Inverted-Pedulum/blob/main/triple_pendulum_simulation.py">triple_pendulum_simulation.py</a>
+        (~1 640 lines), divided into eight numbered sections. Each section is a self-contained
+        class or set of functions with thorough inline docstrings explaining every equation.
+      </p>
+
+      <div class="table-wrap"><table>
+        <tr><th>Section</th><th>Class / content</th><th>Purpose</th></tr>
+        <tr><td>1</td><td><code>SystemParameters</code></td><td>All physical constants (masses, lengths, travel limits) in one editable dataclass</td></tr>
+        <tr><td>2</td><td><code>MotorModel</code></td><td>DC motor torque-speed curve + lead-screw conversion → linear cart force</td></tr>
+        <tr><td>3</td><td><code>TriplePendulumPhysics</code></td><td>Mass matrix M, Coriolis h, gravity G, EOM solver, linearisation for LQR</td></tr>
+        <tr><td>4</td><td><code>PIDController</code></td><td>Manual PD/PID controller — for comparison and experimentation</td></tr>
+        <tr><td>4b</td><td><code>LQRController</code></td><td>Automatic optimal controller — solves Riccati equation, computes K</td></tr>
+        <tr><td>5</td><td><code>Simulation</code></td><td>Zero-Order-Hold ODE integration loop; connects controller, motor, and physics</td></tr>
+        <tr><td>6</td><td><code>Visualizer</code></td><td>Matplotlib real-time animation and four-panel time-series plots</td></tr>
+        <tr><td>7</td><td>Config functions</td><td>Four named ready-to-run test setups (<code>free_swing</code>, <code>pd_stabilise</code>, …)</td></tr>
+        <tr><td>8</td><td><code>main()</code></td><td>CLI entry point — loads a config, runs it, and visualises the result</td></tr>
+      </table></div>
+
+      <p>Data flows in one direction through the stack:</p>
+      <div class="flow">
+        <div class="flow-step"><code>SystemParameters</code> — physical constants (masses, lengths, limits)</div>
+        <div class="flow-arrow">↓</div>
+        <div class="flow-step"><code>TriplePendulumPhysics</code> — builds M, h, G; provides <code>linearise()</code> for LQR</div>
+        <div class="flow-arrow">↓</div>
+        <div class="flow-step"><code>LQRController</code> — solves Riccati equation → gain matrix K</div>
+        <div class="flow-arrow">↓</div>
+        <div class="flow-step"><code>Simulation</code> — ZOH loop: controller → motor model → RK45 ODE → record</div>
+        <div class="flow-arrow">↓</div>
+        <div class="flow-step"><code>SimulationResult</code> — time series of all 8 states and the applied force</div>
+        <div class="flow-arrow">↓</div>
+        <div class="flow-step"><code>Visualizer</code> — animation + four-panel time-series plot</div>
+      </div>
+
+      <p>
+        The <strong>Zero-Order Hold (ZOH)</strong> integration strategy is critical for
+        correctness with an adaptive ODE solver. At the start of each 10 ms control interval
+        the controller evaluates the state and outputs a constant force. The ODE solver (RK45,
+        adaptive step size) then integrates the physics with that fixed force — making the ODE
+        function a pure, stateless function of (t, state). This is exactly how a real
+        microcontroller operates: <em>sample → compute → output → wait → repeat</em>.
+      </p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ DEPLOYMENT ═══════════════════ -->
+  <p class="section-label">Deployment — running the simulation</p>
+
+  <div class="step">
+    <div class="step-header">
+      <span class="step-num green">▶</span>
+      <h2>Installation and usage</h2>
+    </div>
+    <div class="step-body">
+      <p>
+        The simulation runs on any machine with <strong>Python 3.8+</strong>. No build step,
+        no compiled extensions, no external services — just three standard scientific Python
+        packages.
+      </p>
+
+      <div class="run-box" style="text-align:left; margin:0 0 1rem;">
+        <h3>1 — Install dependencies</h3>
+        <code>pip install numpy scipy matplotlib</code>
+      </div>
+
+      <div class="run-box" style="text-align:left; margin:0 0 1rem;">
+        <h3>2 — Run a named configuration</h3>
+        <code>python triple_pendulum_simulation.py --config pd_stabilise --t_end 5</code>
+        <code>python triple_pendulum_simulation.py --config free_swing   --t_end 3</code>
+        <code>python triple_pendulum_simulation.py --config longer_links --t_end 5</code>
+      </div>
+
+      <p><strong>All command-line options:</strong></p>
+      <div class="table-wrap"><table>
+        <tr><th>Flag</th><th>Default</th><th>Description</th></tr>
+        <tr><td><code>--config</code></td><td>pd_stabilise</td><td>Named configuration to run</td></tr>
+        <tr><td><code>--t_end</code></td><td>5.0</td><td>Simulation duration in seconds</td></tr>
+        <tr><td><code>--dt</code></td><td>0.01</td><td>Control step size in seconds (10 ms)</td></tr>
+        <tr><td><code>--no-animate</code></td><td>—</td><td>Skip animation; show only time-series plots</td></tr>
+        <tr><td><code>--save-anim</code></td><td>—</td><td>Save animation to a .gif file (requires Pillow)</td></tr>
+        <tr><td><code>--save-plot</code></td><td>—</td><td>Save time-series figure to a .png file</td></tr>
+        <tr><td><code>--no-show</code></td><td>—</td><td>Suppress plt.show() — useful for headless / CI use</td></tr>
+      </table></div>
+
+      <p><strong>Four built-in configurations:</strong></p>
+      <div class="table-wrap"><table>
+        <tr><th>Name</th><th>Controller</th><th>Description</th></tr>
+        <tr><td><code>free_swing</code></td><td>None</td><td>Pendulum falls freely from 3° lean — verifies physics (energy conservation)</td></tr>
+        <tr><td><code>pd_stabilise</code></td><td>LQR</td><td>Optimal stabilisation from a 3° lean — the main demo; ideal actuator</td></tr>
+        <tr><td><code>longer_links</code></td><td>LQR</td><td>Longer, heavier links; LQR adapts its gains automatically</td></tr>
+        <tr><td><code>secondary_motor</code></td><td>LQR</td><td>Heavier cart with the 312 RPM secondary motor (slower but more torque)</td></tr>
+      </table></div>
+
+      <p><strong>What you will see:</strong></p>
+      <ul>
+        <li>A real-time <strong>Matplotlib animation</strong> of the cart sliding on the rail with three coloured links — red (bottom link), gold (middle), green (top)</li>
+        <li>A four-panel <strong>time-series plot</strong>: link angles (°), angular velocities (°/s), cart position and velocity (m, m/s), and control force (N)</li>
+        <li>Printed LQR closed-loop eigenvalues — each should show ✓ (negative real part) confirming the closed-loop system is stable</li>
+      </ul>
+
+      <p><strong>Programmatic use (as a Python library):</strong></p>
+<pre><code class="language-python">from triple_pendulum_simulation import *
+import numpy as np
+
+params  = SystemParameters(M_cart=2.0, l1=0.3, m1=0.15,
+                            l2=0.25,   m2=0.1, l3=0.2, m3=0.08)
+physics = TriplePendulumPhysics(params)
+ctrl    = LQRController(physics, R=0.001)
+motor   = MotorModel()
+
+sim    = Simulation(physics, ctrl, motor)
+result = sim.run((0, 5),
+                 np.radians([0, 3, 2, 1.5, 0, 0, 0, 0]),
+                 use_motor_model=False)
+
+print(result.theta1)  # link 1 angle time series [rad]
+print(result.force)   # applied force time series [N]
+</code></pre>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ AI & DEVELOPMENT ═══════════════════ -->
+  <p class="section-label">AI &amp; development story</p>
+
+  <div class="step">
+    <div class="step-header">
+      <span class="step-num orange">✦</span>
+      <h2>How GitHub Copilot was used to build this project</h2>
+    </div>
+    <div class="step-body">
+      <p>
+        This project was built with significant assistance from <strong>GitHub Copilot</strong> —
+        an AI coding assistant. Here is an honest breakdown of where AI contributed and where
+        human engineering judgment was essential.
+      </p>
+
+      <div class="table-wrap"><table>
+        <tr><th>Task</th><th>AI contribution</th><th>Human contribution</th></tr>
+        <tr>
+          <td>Lagrangian derivation</td>
+          <td>Generated full derivation steps, coupling coefficients (α, β), and mass matrix entries</td>
+          <td>Verified each formula; caught and corrected sign errors in the Coriolis vector</td>
+        </tr>
+        <tr>
+          <td>LQR implementation</td>
+          <td>Wrote the Riccati solver call, gain formula K = R⁻¹BᵀP, and closed-loop eigenvalue check</td>
+          <td>Chose Q and R weights; validated that all eigenvalues had negative real parts</td>
+        </tr>
+        <tr>
+          <td>Motor model</td>
+          <td>Translated motor datasheet values (1120 RPM free-run, 2.8 N·m stall torque) into the torque-speed curve formula</td>
+          <td>Confirmed lead-screw efficiency figure; identified the back-EMF speed limitation</td>
+        </tr>
+        <tr>
+          <td>Code structure</td>
+          <td>Suggested the 8-section layout and class hierarchy; wrote boilerplate dataclasses and docstrings</td>
+          <td>Decided on the ZOH integration strategy; designed the SimulationResult dataclass</td>
+        </tr>
+        <tr>
+          <td>Animation</td>
+          <td>Generated the Matplotlib FuncAnimation skeleton and the frame-update function</td>
+          <td>Tuned visual parameters (colours, aspect ratio, axis limits, annotations)</td>
+        </tr>
+        <tr>
+          <td>Documentation</td>
+          <td>Drafted README sections and inline comments; generated this web page</td>
+          <td>Reviewed for correctness; added hardware-specific context, FAQ, and configuration notes</td>
+        </tr>
+      </table></div>
+
+      <div class="info-box teal">
+        <strong>Key lesson:</strong> AI is excellent at mechanics — translating mathematical
+        formulas into code, generating boilerplate, drafting explanations. It is less reliable
+        for <em>engineering judgment</em>: choosing cost weights, deciding whether motor
+        bandwidth is sufficient, interpreting eigenvalues, and catching subtle sign errors in
+        physics derivations. All of those required human review and correction.
+      </div>
+
+      <p>
+        The workflow was iterative: Copilot generated a first draft of each class, human
+        review identified correctness issues (four revision cycles on the physics alone),
+        and Copilot revised. The <code style="color:var(--accent2)">free_swing</code> energy
+        conservation test — verifying that total mechanical energy is approximately constant
+        with no control applied — was the key correctness benchmark throughout development.
+      </p>
+
+      <p>
+        This project is a good example of AI-assisted engineering: the AI dramatically
+        accelerated the implementation, especially the tedious Lagrangian algebra and
+        repetitive boilerplate, while a human provided the domain knowledge, hardware
+        context, and quality control.
       </p>
     </div>
   </div>
@@ -614,7 +1107,7 @@ animate_pendulum(history)
 
 <!-- ═══════════════════ FOOTER ═══════════════════ -->
 <footer>
-  Triple Inverted Pendulum on a Cart — GoBilda lead-screw build &nbsp;|&nbsp;
+  Triple Inverted Pendulum on a Cart — brushed DC lead-screw build &nbsp;|&nbsp;
   <a href="https://github.com/CyberBrainiac1/Triple-Inverted-Pedulum">GitHub repo</a>
 </footer>
 
