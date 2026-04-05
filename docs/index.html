@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Triple Inverted Pendulum — How It Works</title>
+
+  <!-- Syntax highlighting (Prism.js from CDN — no build step needed) -->
+  <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
+
+  <style>
+    /* ── Reset & base ───────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --card:     #21253a;
+      --accent:   #7c83fd;
+      --accent2:  #56cfe1;
+      --text:     #e2e4f0;
+      --muted:    #8b90b0;
+      --green:    #6ee7b7;
+      --yellow:   #fcd34d;
+      --orange:   #fb923c;
+      --border:   #2e3250;
+      --radius:   12px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      line-height: 1.7;
+    }
+
+    a { color: var(--accent2); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Layout ─────────────────────────────────────────────────────────── */
+    header {
+      background: linear-gradient(135deg, #1a1d27 0%, #12162b 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 3rem 1.5rem 2.5rem;
+      text-align: center;
+    }
+
+    header h1 {
+      font-size: clamp(1.8rem, 5vw, 3rem);
+      font-weight: 800;
+      background: linear-gradient(120deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 0.5rem;
+    }
+
+    header p { color: var(--muted); font-size: 1.1rem; max-width: 640px; margin: 0 auto; }
+
+    main {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 2.5rem 1.5rem 5rem;
+    }
+
+    /* ── Step cards ──────────────────────────────────────────────────────── */
+    .step {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 2.5rem;
+      overflow: hidden;
+    }
+
+    .step-header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 1.2rem 1.5rem;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .step-num {
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 0.9rem;
+      flex-shrink: 0;
+    }
+    .step-num.blue   { background: #2337a0; color: var(--accent); }
+    .step-num.teal   { background: #0f4a57; color: var(--accent2); }
+    .step-num.green  { background: #0c4035; color: var(--green); }
+    .step-num.yellow { background: #433608; color: var(--yellow); }
+    .step-num.orange { background: #4a1f06; color: var(--orange); }
+
+    .step-header h2 {
+      font-size: 1.15rem;
+      font-weight: 700;
+    }
+
+    .step-body {
+      padding: 1.25rem 1.5rem;
+    }
+
+    .step-body p {
+      color: var(--muted);
+      margin-bottom: 1rem;
+      font-size: 0.97rem;
+    }
+
+    .step-body ul {
+      color: var(--muted);
+      font-size: 0.95rem;
+      padding-left: 1.4rem;
+      margin-bottom: 1rem;
+    }
+    .step-body ul li { margin-bottom: 0.3rem; }
+    .step-body ul li strong { color: var(--text); }
+
+    /* ── Code blocks ─────────────────────────────────────────────────────── */
+    pre[class*="language-"] {
+      border-radius: 8px;
+      margin: 0.5rem 0 0;
+      font-size: 0.88rem;
+      line-height: 1.6;
+    }
+
+    /* ── Diagram ─────────────────────────────────────────────────────────── */
+    .diagram {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.2rem 1.5rem;
+      font-family: 'Courier New', monospace;
+      font-size: 0.85rem;
+      color: var(--accent2);
+      white-space: pre;
+      overflow-x: auto;
+      margin-bottom: 1rem;
+    }
+
+    /* ── Key concepts pills ───────────────────────────────────────────────── */
+    .pills { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
+    .pill {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 0.2rem 0.75rem;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+    .pill strong { color: var(--accent); }
+
+    /* ── Run section ─────────────────────────────────────────────────────── */
+    .run-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      margin-bottom: 2.5rem;
+      text-align: center;
+    }
+    .run-box h3 { color: var(--accent); margin-bottom: 0.75rem; font-size: 1.1rem; }
+    .run-box code {
+      display: inline-block;
+      background: #0d1017;
+      border-radius: 6px;
+      padding: 0.4rem 1rem;
+      font-size: 0.9rem;
+      color: var(--green);
+      margin: 0.25rem 0.25rem;
+    }
+
+    /* ── Footer ──────────────────────────────────────────────────────────── */
+    footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.85rem;
+      padding: 2rem 1rem;
+      border-top: 1px solid var(--border);
+    }
+
+    /* ── Section divider label ───────────────────────────────────────────── */
+    .section-label {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 2.5rem 0 1rem;
+    }
+  </style>
+</head>
+
+<body>
+
+<!-- ═══════════════════ HEADER ═══════════════════ -->
+<header>
+  <h1>Triple Inverted Pendulum</h1>
+  <p>A simple walkthrough of how the physics simulation works, written as plain Python pseudocode.</p>
+</header>
+
+<!-- ═══════════════════ MAIN ═══════════════════ -->
+<main>
+
+  <!-- Quick diagram -->
+  <div class="diagram">      ●  ← tip of link 3
+      |   link 3
+      ●  ← joint between link 2 and 3
+      |   link 2
+      ●  ← joint between link 1 and 2
+      |   link 1
+ ┌────┴────┐
+ │  CART  │
+ └─────────┘
+ ═══════════════════  ← rail
+      x →</div>
+
+  <!-- Run commands -->
+  <div class="run-box">
+    <h3>▶ Run the full simulation</h3>
+    <code>pip install numpy scipy matplotlib</code>
+    <code>python triple_pendulum_simulation.py --config pd_stabilise --t_end 5</code>
+  </div>
+
+  <!-- ─────────────────── STEP 1 ─────────────────── -->
+  <p class="section-label">Step 1 — Define the system</p>
+  <div class="step">
+    <div class="step-header">
+      <span class="step-num blue">1</span>
+      <h2>Describe the physical setup</h2>
+    </div>
+    <div class="step-body">
+      <p>
+        We describe the whole system with just <strong>four numbers</strong> called
+        <em>generalised coordinates</em>. Instead of tracking the X and Y position of every
+        single point, we only need:
+      </p>
+      <ul>
+        <li><strong>x</strong> — where the cart is on the rail (metres, positive = right)</li>
+        <li><strong>θ₁</strong> — how far link 1 is tilted from straight-up (radians)</li>
+        <li><strong>θ₂</strong> — tilt of link 2</li>
+        <li><strong>θ₃</strong> — tilt of link 3</li>
+      </ul>
+      <p>Everything else (the XY position of every joint and mass) can be calculated from these four numbers.</p>
+
+<pre><code class="language-python">## ── STEP 1: Define the system parameters ───────────────────────────────
+
+# All the physical constants you can change to test different setups
+M_cart = 2.0   # kg — how heavy is the cart?
+l1, m1 = 0.30, 0.15   # link 1: length (m), mass (kg)
+l2, m2 = 0.25, 0.10   # link 2
+l3, m3 = 0.20, 0.08   # link 3
+g = 9.81               # gravity (m/s²)
+
+# The state of the whole system is 8 numbers:
+#   positions: x, theta1, theta2, theta3
+#   velocities: x_dot, theta1_dot, theta2_dot, theta3_dot
+state = [x, theta1, theta2, theta3,
+         x_dot, theta1_dot, theta2_dot, theta3_dot]
+</code></pre>
+    </div>
+  </div>
+
+  <!-- ─────────────────── STEP 2 ─────────────────── -->
+  <p class="section-label">Step 2 — Physics: equations of motion</p>
+  <div class="step">
+    <div class="step-header">
+      <span class="step-num teal">2</span>
+      <h2>Calculate accelerations from forces (Lagrangian mechanics)</h2>
+    </div>
+    <div class="step-body">
+      <p>
+        The <strong>Lagrangian method</strong> gives us one master equation that
+        automatically produces all four equations of motion. It works from
+        <em>energy</em> instead of drawing free-body diagrams:
+      </p>
+      <div class="pills">
+        <span class="pill"><strong>T</strong> = kinetic energy (motion)</span>
+        <span class="pill"><strong>V</strong> = potential energy (height)</span>
+        <span class="pill"><strong>L = T − V</strong></span>
+      </div>
+      <p>
+        After doing the calculus (see README for full derivation), the result is a
+        compact matrix equation:
+        <br /><code style="color:var(--accent2)">M(q) · q̈ = F_ext − Coriolis(q, q̇) − Gravity(q) − Damping</code>
+      </p>
+      <ul>
+        <li><strong>M(q)</strong> — 4×4 mass matrix (how inertia is spread across all joints)</li>
+        <li><strong>Coriolis</strong> — centrifugal / coupling forces when links spin fast</li>
+        <li><strong>Gravity</strong> — torque gravity applies to each tilted link</li>
+        <li><strong>F_ext</strong> — cart force from the motor (our control handle)</li>
+      </ul>
+      <p>We solve for the accelerations by rearranging:</p>
+
+<pre><code class="language-python">## ── STEP 2: Compute accelerations at every timestep ────────────────────
+
+def equations_of_motion(state, F_cart):
+    x, th1, th2, th3, x_dot, th1_dot, th2_dot, th3_dot = state
+
+    # ── 2a. Build the 4×4 mass matrix M ──────────────────────────────────
+    # (how hard it is to accelerate each coordinate)
+    # Diagonal = self-inertia; off-diagonal = coupling between links
+    M = build_mass_matrix(th1, th2, th3)   # depends on current angles
+
+    # ── 2b. Coriolis / centrifugal vector h ───────────────────────────────
+    # These appear because the mass matrix changes as the links rotate.
+    # Think: a spinning link "flings" the one above it sideways.
+    # They are proportional to the SQUARE of angular velocities (θ_dot²),
+    # so they are small near the upright and large during fast swings.
+    h = coriolis_vector(th1, th2, th3, th1_dot, th2_dot, th3_dot)
+
+    # ── 2c. Gravity torque vector G ───────────────────────────────────────
+    # Gravity pulls each leaning link further away from vertical.
+    # G[i] = -alpha_i * g * sin(theta_i)
+    # When theta > 0 (leaning right), G < 0 → pulls it further right.
+    # This is the INSTABILITY — gravity is a destabilising force here.
+    G = gravity_vector(th1, th2, th3)
+
+    # ── 2d. Damping (friction) ────────────────────────────────────────────
+    D = [cart_friction * x_dot,
+         joint_damping * th1_dot,
+         joint_damping * th2_dot,
+         joint_damping * th3_dot]
+
+    # ── 2e. Solve  M · q_ddot = F_ext - h - G - D  ───────────────────────
+    F_ext = [F_cart, 0, 0, 0]   # motor force acts only on the cart
+    rhs = F_ext - h - G - D
+    q_ddot = solve(M, rhs)      # numpy.linalg.solve — fast, no explicit M⁻¹
+
+    # Returns [x_ddot, th1_ddot, th2_ddot, th3_ddot,
+    #          x_dot,  th1_dot,  th2_dot,  th3_dot ]
+    return q_ddot + [x_dot, th1_dot, th2_dot, th3_dot]
+</code></pre>
+    </div>
+  </div>
+
+  <!-- ─────────────────── STEP 3 ─────────────────── -->
+  <p class="section-label">Step 3 — Motor model</p>
+  <div class="step">
+    <div class="step-header">
+      <span class="step-num green">3</span>
+      <h2>Convert motor command → cart force</h2>
+    </div>
+    <div class="step-body">
+      <p>
+        The GoBilda Yellow Jacket brushed DC motor follows a simple
+        <strong>linear torque-speed curve</strong>. The faster the cart already
+        moves, the less force the motor can deliver (back-EMF effect).
+        A lead screw then converts shaft rotation into linear cart force.
+      </p>
+      <ul>
+        <li>Primary motor: <strong>1120 RPM</strong> → max 0.149 m/s (8 mm lead)</li>
+        <li>Secondary motor: <strong>312 RPM</strong> → max 0.042 m/s, but 2× the torque</li>
+      </ul>
+
+<pre><code class="language-python">## ── STEP 3: Motor — shaft torque → cart force ───────────────────────────
+
+FREE_SPEED_RPM  = 1120          # no-load speed at full voltage
+STALL_TORQUE_Nm = 2.8           # maximum torque (at zero speed)
+LEAD_m          = 0.008         # 8 mm lead screw (metres per revolution)
+EFFICIENCY      = 0.85          # thread friction loss
+
+def motor_force(command, cart_velocity):
+    """
+    command : float in [-1, +1]  (PWM duty cycle from controller)
+    cart_velocity : current cart speed in m/s
+
+    Returns: force applied to cart in Newtons
+    """
+    # Convert cart speed back to shaft speed
+    omega_free   = FREE_SPEED_RPM * 2*pi / 60   # rad/s
+    omega_shaft  = cart_velocity / (LEAD_m / (2*pi))  # rad/s
+
+    # Torque-speed curve:  tau = tau_stall * (command - omega_shaft/omega_free)
+    # At stall (omega_shaft=0): tau = tau_stall * command  (max torque)
+    # At free-run (omega_shaft=omega_free): tau = 0         (no torque)
+    tau = STALL_TORQUE_Nm * (command - omega_shaft / omega_free)
+
+    # Lead screw: F = tau * (2*pi / lead) * efficiency
+    force = tau * (2*pi / LEAD_m) * EFFICIENCY
+    return force
+</code></pre>
+    </div>
+  </div>
+
+  <!-- ─────────────────── STEP 4 ─────────────────── -->
+  <p class="section-label">Step 4 — Controller (LQR)</p>
+  <div class="step">
+    <div class="step-header">
+      <span class="step-num yellow">4</span>
+      <h2>Compute the control force (LQR — optimal automatic gains)</h2>
+    </div>
+    <div class="step-body">
+      <p>
+        A plain PD controller is very hard to tune for a triple pendulum — the
+        three links couple together in complex ways. Instead we use
+        <strong>LQR (Linear Quadratic Regulator)</strong>, which automatically
+        calculates the best possible gains by solving a single equation.
+      </p>
+      <p>
+        LQR linearises the physics at the upright position (where
+        <code>sin θ ≈ θ</code>), then finds the gain matrix <strong>K</strong>
+        that minimises a cost function balancing how much the links lean vs.
+        how much force we use.
+      </p>
+
+<pre><code class="language-python">## ── STEP 4: LQR controller ──────────────────────────────────────────────
+
+# ── 4a. Linearise the physics at the upright equilibrium ─────────────────
+# At theta=0: sin(theta)≈theta, cos(theta)≈1, Coriolis≈0
+# The result is a simple linear system:   z_dot = A*z + B*u
+A, B = linearise_at_upright(params)   # 8×8 and 8×1 matrices
+
+# ── 4b. Choose cost weights ───────────────────────────────────────────────
+# Q = how much do we care about each state being non-zero?
+# R = how much do we care about using large forces?
+#       State:   [ x,   th1,   th2,   th3,  x_dot, th1_dot, th2_dot, th3_dot ]
+Q = diagonal(    [10,  2000,  2000,  2000,     1,     100,     100,     100  ])
+R = 0.001   # small = controller is allowed to use large forces
+
+# ── 4c. Solve the Riccati equation for the gain matrix K ─────────────────
+# scipy finds the matrix P such that:
+#   A^T P + P A - P B R^-1 B^T P + Q = 0
+# Then: K = R^-1 * B^T * P   (shape: 1 × 8)
+P = scipy.linalg.solve_continuous_are(A, B, Q, R)
+K = (1/R) * B.T @ P
+
+# ── 4d. At every timestep, apply the optimal control law ─────────────────
+def lqr_force(state, x_ref=0.0):
+    z = state.copy()
+    z[0] -= x_ref          # express cart position relative to target
+    force = -(K @ z)       # single matrix-vector multiply → one number
+    return clamp(force, -MAX_FORCE, +MAX_FORCE)
+
+# All 8 gains are found automatically.
+# The signs and magnitudes are globally optimal for the chosen Q and R.
+# No manual trial-and-error needed.
+</code></pre>
+    </div>
+  </div>
+
+  <!-- ─────────────────── STEP 5 ─────────────────── -->
+  <p class="section-label">Step 5 — Run the simulation</p>
+  <div class="step">
+    <div class="step-header">
+      <span class="step-num orange">5</span>
+      <h2>Step the simulation forward in time</h2>
+    </div>
+    <div class="step-body">
+      <p>
+        We use a <strong>Zero-Order-Hold (ZOH)</strong> loop: at every control step
+        the controller picks a force, we hold it constant, and then let the physics
+        integrator advance time with that fixed force. This is exactly what
+        real microcontrollers do (sample → compute → output → wait → repeat).
+      </p>
+
+<pre><code class="language-python">## ── STEP 5: Main simulation loop ────────────────────────────────────────
+
+# Starting conditions — pendulum nearly upright, tiny lean on each link
+state = [0.0,           # x:  cart at centre
+         radians(3),    # th1: 3° lean
+         radians(2),    # th2: 2° lean
+         radians(1.5),  # th3: 1.5° lean
+         0, 0, 0, 0]    # all velocities zero
+
+dt      = 0.01   # control step = 10 ms  (100 Hz)
+t_end   = 5.0    # simulate 5 seconds
+history = []     # store results for plotting
+
+t = 0.0
+while t < t_end:
+
+    # ── 5a. Controller decides the force ─────────────────────────────────
+    F_cart = lqr_force(state, x_ref=0.0)   # wants cart at x=0
+
+    # ── 5b. Convert to motor command, then apply back-EMF model ──────────
+    command = F_cart / MAX_FORCE             # normalise to [-1, +1]
+    F_actual = motor_force(command, state[4])  # real force (back-EMF limited)
+
+    # ── 5c. Integrate physics for this control step ───────────────────────
+    # scipy RK45 adaptive solver — automatically picks sub-steps for accuracy
+    def ode(t, s):
+        return equations_of_motion(s, F_actual)   # F_actual is constant here
+
+    solution = scipy.integrate.solve_ivp(ode, [t, t+dt], state,
+                                         method='RK45', rtol=1e-6)
+    state = solution.y[:, -1]   # state at end of this step
+
+    # ── 5d. Record results ────────────────────────────────────────────────
+    history.append({
+        't':     t,
+        'x':     state[0],
+        'th1':   degrees(state[1]),
+        'th2':   degrees(state[2]),
+        'th3':   degrees(state[3]),
+        'force': F_actual,
+    })
+
+    t += dt   # advance clock
+
+# history now contains the full time series — plot or animate it
+</code></pre>
+    </div>
+  </div>
+
+  <!-- ─────────────────── STEP 6 ─────────────────── -->
+  <p class="section-label">Step 6 — Visualise</p>
+  <div class="step">
+    <div class="step-header">
+      <span class="step-num blue">6</span>
+      <h2>Plot and animate the result</h2>
+    </div>
+    <div class="step-body">
+      <p>
+        From the recorded history we can draw two things: a
+        <strong>time-series chart</strong> (angles, cart position, force vs. time)
+        and a <strong>real-time animation</strong> of the pendulum swinging.
+      </p>
+
+<pre><code class="language-python">## ── STEP 6: Visualisation ───────────────────────────────────────────────
+
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+
+# ── 6a. Time-series plot (4 panels) ──────────────────────────────────────
+fig, axes = plt.subplots(4, 1, figsize=(10, 12))
+
+axes[0].plot(t_values, th1_values, label="θ₁ link1")
+axes[0].plot(t_values, th2_values, label="θ₂ link2")
+axes[0].plot(t_values, th3_values, label="θ₃ link3")
+axes[0].set_ylabel("Angle (°)")
+
+axes[1].plot(t_values, x_values,   label="cart x")
+axes[2].plot(t_values, dx_values,  label="cart ẋ")
+axes[3].plot(t_values, F_values,   label="force (N)")
+
+# ── 6b. Animation ─────────────────────────────────────────────────────────
+def draw_frame(i):
+    cart_x = x_values[i]
+
+    # Work out joint positions from angles (trigonometry)
+    pivot1 = [cart_x, 0]
+    tip1   = [cart_x + l1*sin(th1[i]),  l1*cos(th1[i])]
+    tip2   = [tip1[0] + l2*sin(th2[i]), tip1[1] + l2*cos(th2[i])]
+    tip3   = [tip2[0] + l3*sin(th3[i]), tip2[1] + l3*cos(th3[i])]
+
+    # Draw the cart as a rectangle and the three links as lines
+    draw_cart(cart_x)
+    draw_link(pivot1, tip1, color="blue")
+    draw_link(tip1,   tip2, color="green")
+    draw_link(tip2,   tip3, color="red")
+
+anim = animation.FuncAnimation(fig, draw_frame,
+                                frames=len(t_values),
+                                interval=20)   # 20 ms = 50 fps
+plt.show()
+</code></pre>
+    </div>
+  </div>
+
+  <!-- ─────────────────── PUTTING IT ALL TOGETHER ─────────────────── -->
+  <p class="section-label">Putting it all together</p>
+  <div class="step">
+    <div class="step-header">
+      <span class="step-num teal">→</span>
+      <h2>The complete flow at a glance</h2>
+    </div>
+    <div class="step-body">
+
+<pre><code class="language-python">## ── Complete pseudocode summary ─────────────────────────────────────────
+
+# 1. Define physical constants (masses, lengths, motor specs)
+params = setup_system()
+
+# 2. Pre-compute LQR gain matrix K once (offline, before simulation starts)
+A, B  = linearise_physics(params)
+K     = solve_riccati(A, B, Q, R)
+
+# 3. Set starting state (nearly upright, small lean)
+state = initial_state()
+
+# 4. Simulate in a loop (each iteration = one 10 ms control step)
+while t < t_end:
+
+    F = -(K @ state)                     # LQR: one matrix multiply
+    F = clamp(F, -MAX_FORCE, MAX_FORCE)  # don't exceed motor limit
+
+    state = integrate_physics(state, F, dt=0.01)   # RK45 ODE solver
+    record(t, state, F)
+    t += 0.01
+
+# 5. Plot and animate the recorded history
+plot_time_series(history)
+animate_pendulum(history)
+</code></pre>
+
+      <p style="margin-top: 1rem;">
+        The full implementation with all the maths filled in is in
+        <a href="https://github.com/CyberBrainiac1/Triple-Inverted-Pedulum/blob/copilot/create-triple-inverted-pendulum-simulation/triple_pendulum_simulation.py">
+          triple_pendulum_simulation.py</a>
+        (~1 350 lines, thoroughly commented).
+        The <a href="https://github.com/CyberBrainiac1/Triple-Inverted-Pedulum/blob/copilot/create-triple-inverted-pendulum-simulation/README.md">README</a>
+        explains the physics step-by-step in plain English.
+      </p>
+    </div>
+  </div>
+
+</main>
+
+<!-- ═══════════════════ FOOTER ═══════════════════ -->
+<footer>
+  Triple Inverted Pendulum on a Cart — GoBilda lead-screw build &nbsp;|&nbsp;
+  <a href="https://github.com/CyberBrainiac1/Triple-Inverted-Pedulum">GitHub repo</a>
+</footer>
+
+</body>
+</html>
