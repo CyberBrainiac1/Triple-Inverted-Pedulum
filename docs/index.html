@@ -127,6 +127,8 @@
       margin: 0.5rem 0 0;
       font-size: 0.88rem;
       line-height: 1.6;
+      overflow-x: auto;
+      max-width: 100%;
     }
 
     /* ── Diagram ─────────────────────────────────────────────────────────── */
@@ -173,6 +175,10 @@
       font-size: 0.9rem;
       color: var(--green);
       margin: 0.25rem 0.25rem;
+      max-width: 100%;
+      overflow-x: auto;
+      word-break: break-all;
+      white-space: pre-wrap;
     }
 
     /* ── Footer ──────────────────────────────────────────────────────────── */
@@ -192,6 +198,30 @@
       text-transform: uppercase;
       color: var(--muted);
       margin: 2.5rem 0 1rem;
+    }
+
+    /* ── Mobile adjustments (≤ 600 px) ──────────────────────────────────── */
+    @media (max-width: 600px) {
+      header { padding: 2rem 1rem 1.5rem; }
+      header p { font-size: 0.97rem; }
+
+      main { padding: 1.5rem 0.9rem 3rem; }
+
+      .step-header { padding: 0.9rem 1rem; gap: 0.75rem; }
+      .step-header h2 { font-size: 1rem; }
+
+      .step-body { padding: 1rem; }
+      .step-body p,
+      .step-body ul { font-size: 0.9rem; }
+
+      pre[class*="language-"] { font-size: 0.78rem; }
+
+      .diagram { font-size: 0.75rem; padding: 0.9rem 1rem; }
+
+      .run-box { padding: 1rem; }
+      .run-box code { font-size: 0.8rem; display: block; margin: 0.35rem 0; }
+
+      .pill { font-size: 0.78rem; }
     }
   </style>
 </head>
@@ -287,7 +317,7 @@ state = [x, theta1, theta2, theta3,
       <p>
         After doing the calculus (see README for full derivation), the result is a
         compact matrix equation:
-        <br /><code style="color:var(--accent2)">M(q) · q̈ = F_ext − Coriolis(q, q̇) − Gravity(q) − Damping</code>
+        <br /><code style="color:var(--accent2);word-break:break-word;">M(q) · q̈ = F_ext − Coriolis(q, q̇) − Gravity(q) − Damping</code>
       </p>
       <ul>
         <li><strong>M(q)</strong> — 4×4 mass matrix (how inertia is spread across all joints)</li>
