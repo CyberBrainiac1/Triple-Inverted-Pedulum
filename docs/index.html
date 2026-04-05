@@ -200,6 +200,86 @@
       margin: 2.5rem 0 1rem;
     }
 
+    /* ── Live simulation ─────────────────────────────────────────────────── */
+    .sim-wrapper {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin-bottom: 2.5rem;
+    }
+
+    #pendCanvas {
+      display: block;
+      width: 100%;
+      touch-action: none;
+      cursor: crosshair;
+      background: #0d1017;
+    }
+
+    .sim-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      padding: 0.75rem 1rem;
+      border-top: 1px solid var(--border);
+      background: var(--card);
+    }
+
+    .sim-stat {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.82rem;
+    }
+
+    .stat-label {
+      color: var(--muted);
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+    }
+
+    .stat-value {
+      font-family: 'Courier New', monospace;
+      font-size: 0.82rem;
+      color: var(--text);
+      min-width: 4.5rem;
+    }
+
+    .sim-controls {
+      display: flex;
+      gap: 0.5rem;
+      padding: 0.75rem 1rem;
+      border-top: 1px solid var(--border);
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .sim-controls button {
+      padding: 0.45rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--text);
+      font-size: 0.88rem;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+      -webkit-tap-highlight-color: transparent;
+      min-height: 36px;
+    }
+
+    .sim-controls button:hover,
+    .sim-controls button:active { background: var(--card); border-color: var(--accent); }
+    .sim-controls button.active { background: #2337a0; border-color: var(--accent); color: var(--accent); }
+
+    .sim-hint {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-left: auto;
+      white-space: nowrap;
+    }
+
     /* ── Mobile adjustments (≤ 600 px) ──────────────────────────────────── */
     @media (max-width: 600px) {
       header { padding: 2rem 1rem 1.5rem; }
@@ -222,6 +302,11 @@
       .run-box code { font-size: 0.8rem; display: block; margin: 0.35rem 0; }
 
       .pill { font-size: 0.78rem; }
+
+      .sim-hint { display: none; }
+      .sim-controls { gap: 0.4rem; padding: 0.6rem 0.75rem; }
+      .sim-controls button { font-size: 0.82rem; padding: 0.4rem 0.8rem; }
+      .sim-stats { padding: 0.6rem 0.75rem; }
     }
 
     /* ── Info / callout boxes ─────────────────────────────────────────────── */
@@ -271,6 +356,44 @@
 
 <!-- ═══════════════════ MAIN ═══════════════════ -->
 <main>
+
+  <!-- ═══════════════════ LIVE SIMULATION ═══════════════════ -->
+  <p class="section-label">Live simulation — real physics, runs in your browser</p>
+  <div class="sim-wrapper">
+    <canvas id="pendCanvas"></canvas>
+    <div class="sim-stats">
+      <div class="sim-stat">
+        <span class="stat-label">θ₁</span>
+        <span class="stat-value" id="s-th1">+0.00°</span>
+      </div>
+      <div class="sim-stat">
+        <span class="stat-label">θ₂</span>
+        <span class="stat-value" id="s-th2">+0.00°</span>
+      </div>
+      <div class="sim-stat">
+        <span class="stat-label">θ₃</span>
+        <span class="stat-value" id="s-th3">+0.00°</span>
+      </div>
+      <div class="sim-stat">
+        <span class="stat-label">x</span>
+        <span class="stat-value" id="s-x">+0.000 m</span>
+      </div>
+      <div class="sim-stat">
+        <span class="stat-label">F</span>
+        <span class="stat-value" id="s-force">+0 N</span>
+      </div>
+      <div class="sim-stat" id="ctrl-badge" style="margin-left:auto">
+        <span class="stat-label" style="color:var(--green)">LQR ACTIVE</span>
+      </div>
+    </div>
+    <div class="sim-controls">
+      <button id="btnPlay">⏸ Pause</button>
+      <button id="btnReset">↺ Reset</button>
+      <button id="btnNudge">⚡ Nudge</button>
+      <button id="btnMode">Free swing</button>
+      <span class="sim-hint">Tap canvas to push cart</span>
+    </div>
+  </div>
 
   <!-- ─────────────────── BACKGROUND ─────────────────── -->
   <p class="section-label">Background — What &amp; why</p>
@@ -1110,6 +1233,421 @@ print(result.force)   # applied force time series [N]
   Triple Inverted Pendulum on a Cart — brushed DC lead-screw build &nbsp;|&nbsp;
   <a href="https://github.com/CyberBrainiac1/Triple-Inverted-Pedulum">GitHub repo</a>
 </footer>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════════
+   Triple Inverted Pendulum — Browser Simulation
+   Full nonlinear Lagrangian physics + LQR control, RK4 integration
+   State: z = [x, θ₁, θ₂, θ₃, ẋ, θ̇₁, θ̇₂, θ̇₃]
+   ══════════════════════════════════════════════════════════════════════ */
+
+(function () {
+  "use strict";
+
+  /* ── Physical constants ─────────────────────────────────────────────── */
+  const MC = 2.0, L1 = 0.30, M1 = 0.15, L2 = 0.25, M2 = 0.10, L3 = 0.20, M3 = 0.08;
+  const GG = 9.81, X_MIN = -0.5, X_MAX = 0.5;
+  const CART_FRIC = 5.0, JOINT_DAMP = 0.001;
+  const MAX_FORCE = 500.0;
+  const SIM_DT = 0.005;     // 200 Hz physics steps per render frame
+  const CTRL_DT = 0.01;     // 100 Hz LQR evaluation
+
+  /* ── Precomputed coupling coefficients ─────────────────────────────── */
+  const a1 = M1*(L1/2) + (M2+M3)*L1;   // 0.0765
+  const a2 = M2*(L2/2) + M3*L2;         // 0.0325
+  const a3 = M3*(L3/2);                  // 0.008
+  const b12 = (M2*(L2/2)+M3*L2)*L1;    // 0.00975
+  const b13 = M3*(L3/2)*L1;             // 0.0024
+  const b23 = M3*(L3/2)*L2;             // 0.002
+  const I1 = M1*L1*L1/3, I2 = M2*L2*L2/3, I3 = M3*L3*L3/3;
+
+  /* ── LQR gain matrix K (precomputed via scipy for Q=diag[10,2000,2000,2000,1,100,100,100], R=0.001)
+     Control law: F = −K · z  ──────────────────────────────────────── */
+  const K = [-100.0, -20120.939, 68895.853, -52928.986,
+             -291.932,  -940.338,  5417.552,  -6679.949];
+
+  /* ── Gaussian elimination: solve 4×4 system A·x = b ───────────────── */
+  function solve4(A, b) {
+    const m = A.map((r, i) => [...r, b[i]]);
+    for (let c = 0; c < 4; c++) {
+      let mx = c;
+      for (let r = c+1; r < 4; r++) if (Math.abs(m[r][c]) > Math.abs(m[mx][c])) mx = r;
+      [m[c], m[mx]] = [m[mx], m[c]];
+      for (let r = c+1; r < 4; r++) {
+        const f = m[r][c] / m[c][c];
+        for (let j = c; j <= 4; j++) m[r][j] -= f * m[c][j];
+      }
+    }
+    const x = [0,0,0,0];
+    for (let i = 3; i >= 0; i--) {
+      x[i] = m[i][4];
+      for (let j = i+1; j < 4; j++) x[i] -= m[i][j]*x[j];
+      x[i] /= m[i][i];
+    }
+    return x;
+  }
+
+  /* ── Mass matrix M(q) — symmetric 4×4 ──────────────────────────────── */
+  function massMatrix(t1, t2, t3) {
+    const c1 = Math.cos(t1), c2 = Math.cos(t2), c3 = Math.cos(t3);
+    const c12 = Math.cos(t1-t2), c13 = Math.cos(t1-t3), c23 = Math.cos(t2-t3);
+    return [
+      [MC+M1+M2+M3,       a1*c1,                     a2*c2,                     a3*c3           ],
+      [a1*c1,              M1*(L1/2)**2+I1+(M2+M3)*L1*L1, b12*c12,               b13*c13          ],
+      [a2*c2,              b12*c12,                   M2*(L2/2)**2+I2+M3*L2*L2,  b23*c23          ],
+      [a3*c3,              b13*c13,                   b23*c23,                   M3*(L3/2)**2+I3  ]
+    ];
+  }
+
+  /* ── Equations of motion: returns ż = [q̈, q̇] ──────────────────────── */
+  function deriv(z, F) {
+    const [x, t1, t2, t3, xd, t1d, t2d, t3d] = z;
+    const s1=Math.sin(t1), s2=Math.sin(t2), s3=Math.sin(t3);
+    const s12=Math.sin(t1-t2), s13=Math.sin(t1-t3), s23=Math.sin(t2-t3);
+
+    // Coriolis / centrifugal vector h
+    const h = [
+      -a1*s1*t1d*t1d - a2*s2*t2d*t2d - a3*s3*t3d*t3d,
+       b12*s12*t2d*t2d + b13*s13*t3d*t3d,
+      -b12*s12*t1d*t1d + b23*s23*t3d*t3d,
+      -b13*s13*t1d*t1d - b23*s23*t2d*t2d
+    ];
+    // Gravity vector G  (G[i] = −αᵢ g sin θᵢ)
+    const Gv = [0, -a1*GG*s1, -a2*GG*s2, -a3*GG*s3];
+    // Damping D
+    const D = [CART_FRIC*xd, JOINT_DAMP*t1d, JOINT_DAMP*t2d, JOINT_DAMP*t3d];
+
+    // RHS = F_ext − h − G − D
+    const rhs = [
+      F  - h[0] - Gv[0] - D[0],
+         - h[1] - Gv[1] - D[1],
+         - h[2] - Gv[2] - D[2],
+         - h[3] - Gv[3] - D[3]
+    ];
+    const qdd = solve4(massMatrix(t1,t2,t3), rhs);
+
+    // Hard wall at rail limits
+    if ((x <= X_MIN && xd < 0) || (x >= X_MAX && xd > 0)) qdd[0] = 0;
+
+    // Return [ẋ, θ̇₁, θ̇₂, θ̇₃, ẍ, θ̈₁, θ̈₂, θ̈₃] — derivative of state vector
+    return [xd, t1d, t2d, t3d, qdd[0], qdd[1], qdd[2], qdd[3]];
+  }
+
+  /* ── RK4 integration step ────────────────────────────────────────────── */
+  function rk4(z, F, dt) {
+    const k1 = deriv(z, F);
+    const s2 = z.map((v,i)=>v+0.5*dt*k1[i]);
+    const k2 = deriv(s2, F);
+    const s3 = z.map((v,i)=>v+0.5*dt*k2[i]);
+    const k3 = deriv(s3, F);
+    const s4 = z.map((v,i)=>v+dt*k3[i]);
+    const k4 = deriv(s4, F);
+    return z.map((v,i)=>v+(dt/6)*(k1[i]+2*k2[i]+2*k3[i]+k4[i]));
+  }
+
+  /* ── LQR force ───────────────────────────────────────────────────────── */
+  function lqrForce(z) {
+    let F = 0;
+    for (let i = 0; i < 8; i++) F -= K[i] * z[i];
+    return Math.max(-MAX_FORCE, Math.min(MAX_FORCE, F));
+  }
+
+  /* ── Simulation state ────────────────────────────────────────────────── */
+  const DEG = Math.PI/180;
+  function makeInitState(lean) {
+    lean = lean || 1;
+    return [0, lean*3*DEG, lean*2*DEG, lean*1.5*DEG, 0, 0, 0, 0];
+  }
+
+  let state      = makeInitState(1);
+  let running    = true;
+  let lqrOn      = true;
+  let cartForce  = 0;       // current computed force
+  let ctrlTimer  = 0;       // accumulator for 100 Hz LQR
+  let simTime    = 0;
+  let fell       = false;
+  let pendInput  = 0;       // external nudge impulse
+
+  /* ── Canvas & rendering setup ────────────────────────────────────────── */
+  const canvas = document.getElementById('pendCanvas');
+  const ctx    = canvas.getContext('2d');
+
+  function resizeCanvas() {
+    const W = canvas.parentElement.offsetWidth;
+    const H = Math.max(220, Math.min(Math.round(W * 0.55), 340));
+    canvas.width  = W * window.devicePixelRatio;
+    canvas.height = H * window.devicePixelRatio;
+    canvas.style.height = H + 'px';
+    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+    return { W, H };
+  }
+
+  /* ── Coordinate helpers ─────────────────────────────────────────────── */
+  function physToCanvas(px, py, W, H) {
+    // Physical origin: x=0, y=0 at rail centre
+    // Canvas: rail at 78% of height, scale so rail (±0.65 m) fills 90% of width
+    const scale = (W * 0.88) / 1.3;
+    return {
+      cx: W/2 + px * scale,
+      cy: H * 0.78 - py * scale
+    };
+  }
+
+  /* ── Drawing helpers ─────────────────────────────────────────────────── */
+  const COL_LINK1  = '#fb923c';   // orange
+  const COL_LINK2  = '#fcd34d';   // yellow
+  const COL_LINK3  = '#6ee7b7';   // green
+  const COL_CART   = '#7c83fd';   // accent
+  const COL_RAIL   = '#3a3f5e';
+  const COL_JOINT  = '#e2e4f0';
+  const COL_WHEEL  = '#2e3250';
+
+  function drawScene(W, H) {
+    ctx.clearRect(0, 0, W, H);
+
+    const [x, t1, t2, t3] = state;
+
+    // Convert physical positions to canvas
+    const cart  = physToCanvas(x, 0, W, H);
+    const j1    = physToCanvas(x + L1*Math.sin(t1), L1*Math.cos(t1), W, H);
+    const j2    = physToCanvas(x + L1*Math.sin(t1) + L2*Math.sin(t2),
+                                   L1*Math.cos(t1) + L2*Math.cos(t2), W, H);
+    const tip   = physToCanvas(x + L1*Math.sin(t1) + L2*Math.sin(t2) + L3*Math.sin(t3),
+                                   L1*Math.cos(t1) + L2*Math.cos(t2) + L3*Math.cos(t3), W, H);
+
+    const sc    = (W * 0.88) / 1.3;   // pixels per metre (same as physToCanvas)
+    const railY = cart.cy;
+
+    /* ── Rail ── */
+    const railL = physToCanvas(X_MIN, 0, W, H).cx - 8;
+    const railR = physToCanvas(X_MAX, 0, W, H).cx + 8;
+
+    ctx.strokeStyle = COL_RAIL;
+    ctx.lineWidth   = 3;
+    ctx.beginPath(); ctx.moveTo(railL, railY); ctx.lineTo(railR, railY); ctx.stroke();
+
+    // Rail end stops
+    ctx.lineWidth = 4;
+    [railL, railR].forEach(rx => {
+      ctx.beginPath(); ctx.moveTo(rx, railY-10); ctx.lineTo(rx, railY+10); ctx.stroke();
+    });
+
+    // Rail ticks
+    ctx.strokeStyle = COL_RAIL;
+    ctx.lineWidth = 1;
+    for (let xm = -0.4; xm <= 0.4; xm += 0.1) {
+      const tx = physToCanvas(xm, 0, W, H).cx;
+      ctx.beginPath(); ctx.moveTo(tx, railY-3); ctx.lineTo(tx, railY+3); ctx.stroke();
+    }
+
+    /* ── Cart ── */
+    const cw = Math.max(30, sc * 0.18);
+    const ch = Math.max(14, sc * 0.07);
+    const cr = 5;   // corner radius
+
+    // Cart body
+    ctx.beginPath();
+    ctx.roundRect(cart.cx - cw/2, railY - ch, cw, ch, cr);
+    ctx.fillStyle   = COL_CART + '33';
+    ctx.strokeStyle = COL_CART;
+    ctx.lineWidth   = 2;
+    ctx.fill(); ctx.stroke();
+
+    // Wheels
+    const wr = Math.max(5, sc * 0.025);
+    [cart.cx - cw*0.28, cart.cx + cw*0.28].forEach(wx => {
+      ctx.beginPath(); ctx.arc(wx, railY + wr*0.3, wr, 0, 2*Math.PI);
+      ctx.fillStyle = COL_WHEEL; ctx.strokeStyle = COL_CART;
+      ctx.lineWidth = 1.5; ctx.fill(); ctx.stroke();
+    });
+
+    /* ── Force arrow ── */
+    if (Math.abs(cartForce) > 5) {
+      const dir    = Math.sign(cartForce);
+      const frac   = Math.min(Math.abs(cartForce) / MAX_FORCE, 1);
+      const arrowL = frac * cw * 1.1;
+      const ax     = cart.cx + dir * (cw/2 + 4);
+      const ay     = railY - ch/2;
+      ctx.strokeStyle = '#f87171';
+      ctx.lineWidth   = 2.5;
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(ax + dir*arrowL, ay); ctx.stroke();
+      // arrowhead
+      ctx.beginPath();
+      ctx.moveTo(ax + dir*arrowL, ay);
+      ctx.lineTo(ax + dir*arrowL - dir*7, ay - 4);
+      ctx.lineTo(ax + dir*arrowL - dir*7, ay + 4);
+      ctx.closePath(); ctx.fillStyle = '#f87171'; ctx.fill();
+    }
+
+    /* ── Links ── */
+    function drawLink(from, to, color, lw) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth   = lw || Math.max(4, sc * 0.018);
+      ctx.lineCap     = 'round';
+      ctx.beginPath(); ctx.moveTo(from.cx, from.cy); ctx.lineTo(to.cx, to.cy); ctx.stroke();
+    }
+    drawLink(cart, j1,  COL_LINK1);
+    drawLink(j1,   j2,  COL_LINK2);
+    drawLink(j2,   tip, COL_LINK3);
+
+    /* ── Joints & tip ── */
+    function drawJoint(pt, r, color) {
+      ctx.beginPath(); ctx.arc(pt.cx, pt.cy, r, 0, 2*Math.PI);
+      ctx.fillStyle   = color; ctx.strokeStyle = COL_JOINT;
+      ctx.lineWidth   = 1.5; ctx.fill(); ctx.stroke();
+    }
+    const jr = Math.max(5, sc * 0.022);
+    drawJoint(cart, jr,      COL_CART);
+    drawJoint(j1,   jr*0.85, COL_LINK1);
+    drawJoint(j2,   jr*0.75, COL_LINK2);
+    drawJoint(tip,  jr*0.65, COL_LINK3);
+
+    /* ── "Fell" overlay ── */
+    if (fell) {
+      ctx.fillStyle = 'rgba(13,16,23,0.65)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle    = '#f87171';
+      ctx.font         = `bold ${Math.round(W*0.045)}px system-ui,sans-serif`;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Pendulum fell — tap Reset', W/2, H/2);
+    }
+
+    /* ── LQR off label ── */
+    if (!lqrOn && !fell) {
+      ctx.fillStyle    = '#fcd34d88';
+      ctx.font         = `${Math.round(W*0.028)}px system-ui,sans-serif`;
+      ctx.textAlign    = 'right';
+      ctx.textBaseline = 'top';
+      ctx.fillText('Free swing (no control)', W - 10, 8);
+    }
+  }
+
+  /* ── Update HUD ─────────────────────────────────────────────────────── */
+  function updateHUD() {
+    const R2D = 180/Math.PI;
+    document.getElementById('s-th1').textContent   = (state[1]*R2D >= 0 ? '+' : '') + (state[1]*R2D).toFixed(2) + '°';
+    document.getElementById('s-th2').textContent   = (state[2]*R2D >= 0 ? '+' : '') + (state[2]*R2D).toFixed(2) + '°';
+    document.getElementById('s-th3').textContent   = (state[3]*R2D >= 0 ? '+' : '') + (state[3]*R2D).toFixed(2) + '°';
+    document.getElementById('s-x').textContent     = (state[0] >= 0 ? '+' : '') + state[0].toFixed(3) + ' m';
+    document.getElementById('s-force').textContent = (cartForce >= 0 ? '+' : '') + cartForce.toFixed(0) + ' N';
+
+    const badge = document.getElementById('ctrl-badge').querySelector('.stat-label');
+    if (fell) {
+      badge.textContent = 'FELL';
+      badge.style.color = '#f87171';
+    } else if (lqrOn) {
+      badge.textContent = 'LQR ACTIVE';
+      badge.style.color = 'var(--green)';
+    } else {
+      badge.textContent = 'FREE SWING';
+      badge.style.color = 'var(--yellow)';
+    }
+  }
+
+  /* ── Main loop ──────────────────────────────────────────────────────── */
+  let lastTime = null;
+  function loop(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    let elapsed = Math.min((timestamp - lastTime) / 1000, 0.05); // cap at 50 ms
+    lastTime = timestamp;
+
+    if (running && !fell) {
+      // Apply external nudge as a single impulse then decay
+      const nudge = pendInput;
+      pendInput *= 0.85;
+      if (Math.abs(pendInput) < 0.01) pendInput = 0;
+
+      ctrlTimer += elapsed;
+      if (ctrlTimer >= CTRL_DT) {
+        ctrlTimer -= CTRL_DT;
+        cartForce = lqrOn ? lqrForce(state) + nudge : nudge;
+      }
+
+      // Physics sub-steps
+      const steps = Math.ceil(elapsed / SIM_DT);
+      const dt    = elapsed / steps;
+      for (let i = 0; i < steps; i++) {
+        state = rk4(state, cartForce, dt);
+        // Clamp cart to rail
+        state[0] = Math.max(X_MIN, Math.min(X_MAX, state[0]));
+        if (state[0] === X_MIN || state[0] === X_MAX) state[4] = 0;
+      }
+      simTime += elapsed;
+
+      // Detect fall: any angle > 45°
+      if (lqrOn && (Math.abs(state[1]) > 0.78 || Math.abs(state[2]) > 0.78 || Math.abs(state[3]) > 0.78)) {
+        fell = true;
+      }
+    }
+
+    const dims = resizeCanvas();
+    drawScene(dims.W, dims.H);
+    updateHUD();
+    requestAnimationFrame(loop);
+  }
+
+  /* ── Controls ───────────────────────────────────────────────────────── */
+  const btnPlay  = document.getElementById('btnPlay');
+  const btnReset = document.getElementById('btnReset');
+  const btnNudge = document.getElementById('btnNudge');
+  const btnMode  = document.getElementById('btnMode');
+
+  btnPlay.addEventListener('click', () => {
+    if (fell) return;
+    running = !running;
+    btnPlay.textContent = running ? '⏸ Pause' : '▶ Play';
+  });
+
+  btnReset.addEventListener('click', () => {
+    state     = makeInitState(1);
+    fell      = false;
+    running   = true;
+    cartForce = 0;
+    pendInput = 0;
+    simTime   = 0;
+    ctrlTimer = 0;
+    btnPlay.textContent = '⏸ Pause';
+  });
+
+  btnNudge.addEventListener('click', () => {
+    if (fell) return;
+    // Random direction nudge
+    pendInput += (Math.random() > 0.5 ? 1 : -1) * 80;
+  });
+
+  btnMode.addEventListener('click', () => {
+    lqrOn = !lqrOn;
+    btnMode.textContent = lqrOn ? 'Free swing' : 'LQR on';
+    btnMode.classList.toggle('active', !lqrOn);
+    cartForce = 0;
+    if (!lqrOn) {
+      // Start from a small lean in free-swing mode
+      state = makeInitState(0.3);
+      fell  = false; running = true;
+      btnPlay.textContent = '⏸ Pause';
+    }
+  });
+
+  /* ── Tap / click canvas → push cart toward tap point ──────────────── */
+  function handleTap(clientX) {
+    if (fell) return;
+    const rect = canvas.getBoundingClientRect();
+    const relX = (clientX - rect.left) / rect.width - 0.5;  // −0.5..+0.5
+    pendInput += relX * 300;  // proportional push toward tap
+  }
+
+  canvas.addEventListener('pointerdown', e => { e.preventDefault(); handleTap(e.clientX); });
+
+  /* ── Resize handler ─────────────────────────────────────────────────── */
+  window.addEventListener('resize', resizeCanvas);
+
+  /* ── Kick off ───────────────────────────────────────────────────────── */
+  resizeCanvas();
+  requestAnimationFrame(loop);
+
+})();
+</script>
 
 </body>
 </html>
