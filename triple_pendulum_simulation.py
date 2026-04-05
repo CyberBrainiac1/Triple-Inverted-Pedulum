@@ -545,12 +545,68 @@ class TriplePendulumPhysics:
             # Degenerate (near-singular) configuration — use least-squares
             q_ddot, _, _, _ = np.linalg.lstsq(M, rhs, rcond=None)
 
-        # Hard wall: if the cart hits a travel limit, stop its acceleration
-        if (x <= p.x_min and dx < 0) or (x >= p.x_max and dx > 0):
-            q_ddot[0] = 0.0
+        # Hard wall: one-sided constraint — the wall provides a normal force
+        # only in the inward direction so that friction still decelerates the
+        # cart after it has reached the limit.
+        if x <= p.x_min and dx < 0:
+            q_ddot[0] = max(q_ddot[0], 0.0)   # left wall: only push rightward
+        elif x >= p.x_max and dx > 0:
+            q_ddot[0] = min(q_ddot[0], 0.0)   # right wall: only push leftward
 
         # Return full state derivative: [q̇, q̈]
         return np.concatenate([state[4:], q_ddot])
+
+    def mass_matrix(self, state: np.ndarray) -> np.ndarray:
+        """
+        Return the 4×4 symmetric mass matrix M(θ1, θ2, θ3) for the current
+        state.  Column 0 of M⁻¹ gives the sensitivity of each generalised
+        acceleration to the cart force, used by SwingUpController.
+        """
+        _, th1, th2, th3, _, _, _, _ = state
+        return self._mass_matrix(th1, th2, th3)
+
+    def total_energy(self, state: np.ndarray) -> float:
+        """
+        Total mechanical energy of the system: kinetic + potential.
+
+            E = ½·q̇ᵀ·M·q̇  +  Σᵢ mᵢ·g·yᵢ_COM
+
+        where yᵢ_COM is the height of link i's centre of mass above the cart
+        pivot (positive upward).
+
+        At the upright equilibrium (all θ=0, all θ̇=0):
+            E* = g · [m₁·l₁/2 + m₂·(l₁+l₂/2) + m₃·(l₁+l₂+l₃/2)]
+
+        This is the TARGET energy for the swing-up controller.
+        """
+        x, th1, th2, th3, dx, dth1, dth2, dth3 = state
+        p = self.params
+
+        # Kinetic energy via the full mass matrix (includes all coupling)
+        qdot = np.array([dx, dth1, dth2, dth3])
+        M    = self._mass_matrix(th1, th2, th3)
+        KE   = 0.5 * qdot @ M @ qdot
+
+        # Potential energy (heights relative to cart pivot plane)
+        c1, c2, c3 = np.cos(th1), np.cos(th2), np.cos(th3)
+        y_COM1 = (p.l1 / 2) * c1
+        y_COM2 = p.l1 * c1 + (p.l2 / 2) * c2
+        y_COM3 = p.l1 * c1 + p.l2 * c2 + (p.l3 / 2) * c3
+        PE = p.g * (p.m1 * y_COM1 + p.m2 * y_COM2 + p.m3 * y_COM3)
+
+        return float(KE + PE)
+
+    def upright_energy(self) -> float:
+        """
+        Target (upright) total mechanical energy: potential energy when all
+        links are exactly vertical (θᵢ=0) and at rest.
+        """
+        p = self.params
+        return float(p.g * (
+            p.m1 * (p.l1 / 2)
+            + p.m2 * (p.l1 + p.l2 / 2)
+            + p.m3 * (p.l1 + p.l2 + p.l3 / 2)
+        ))
 
     def tip_positions(self, state: np.ndarray) -> dict:
         """
@@ -901,6 +957,154 @@ class LQRController:
         return float(np.clip(F, -self.max_force, self.max_force))
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 4c — SwingUpController
+# ══════════════════════════════════════════════════════════════════════════════
+
+class SwingUpController:
+    """
+    Energy-based swing-up controller for the triple inverted pendulum.
+
+    Uses the Åström–Furuta energy-pumping method: the cart is driven to inject
+    mechanical energy into each pendulum link, swinging them from the stable
+    hanging equilibrium (θ = π) to the unstable upright (θ = 0).
+
+    The Lyapunov function for the TOTAL system energy
+
+        V = (E_total − E*)²,   E* = upright potential energy (at rest)
+
+    decreases monotonically under the control law
+
+        F = −k_energy · ΔE_total · ẋ_cart,   ΔE_total = E_total − E*
+
+    because  dE_total/dt = F_cart · ẋ_cart  (external power input), giving
+
+        V̇ = 2·ΔE · Ė = 2·ΔE · (−k·ΔE·ẋ²) = −2·k·ΔE²·ẋ² ≤ 0  ✓
+
+    Physical interpretation:
+      • When the total energy is below the upright target (ΔE < 0) and the
+        cart is moving rightward (ẋ > 0): the force is positive (rightward),
+        ADDING energy to the system → oscillation amplitude grows.
+      • When the total energy overshoots the target (ΔE > 0): the force sign
+        reverses → excess energy is removed (braking).
+    This correctly handles ALL three links simultaneously because the formula
+    targets the FULL kinetic + potential energy of the coupled system.
+
+    A strong cart-centering spring prevents the cart from reaching the rail
+    ends while the pump is active.
+
+    Switch condition (call is_near_upright()):
+        All |normalise(θᵢ)| < switch_angle  →  hand off to LQR controller.
+    """
+
+    def __init__(
+        self,
+        physics: "TriplePendulumPhysics",
+        k_energy: float = 50.0,
+        max_force: float = 300.0,
+        switch_angle_deg: float = 20.0,
+        cart_k: float = 100.0,
+        cart_d: float = 20.0,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        physics          : TriplePendulumPhysics (for physical constants).
+        k_energy         : Energy-pumping gain [N/J].  The formula is
+                           F_pump = −k_energy · ΔE_total · ẋ_cart.
+        max_force        : Saturation limit on the output force [N].
+        switch_angle_deg : Angle threshold for LQR handoff [°].
+                           All three links must be within this of upright.
+        cart_k           : Soft spring gain for cart centering [N/m].
+        cart_d           : Soft damper gain for cart centering [N·s/m].
+        """
+        self.physics      = physics
+        self.k_energy     = k_energy
+        self.max_force    = max_force
+        self.switch_angle = np.radians(switch_angle_deg)
+        self.cart_k       = cart_k
+        self.cart_d       = cart_d
+        self._p           = physics.params
+        # Cache the target energy (constant for a given system)
+        self._E_star      = physics.upright_energy()
+
+    def is_near_upright(self, state: np.ndarray) -> bool:
+        """
+        Return True when all three links are within switch_angle of the upright.
+
+        Angles are normalised to (−π, π] before comparison so that wrapped
+        angles (e.g. θ > 2π after a full revolution) are handled correctly.
+        """
+        for theta in state[1:4]:
+            theta_norm = (theta + np.pi) % (2 * np.pi) - np.pi
+            if abs(theta_norm) > self.switch_angle:
+                return False
+        return True
+
+    def reset(self) -> None:
+        """No internal state to reset."""
+
+    def update_integrals(
+        self, state: np.ndarray, dt: float, x_ref: float = 0.0
+    ) -> None:
+        """No integral state — no-op."""
+
+    def compute(
+        self, state: np.ndarray, dt: float = 0.01, x_ref: float = 0.0
+    ) -> float:
+        """
+        Compute the energy-pumping control force.
+
+        Uses the TOTAL system energy (kinetic + potential of all links and
+        cart) rather than individual per-link energies.  The Lyapunov function
+
+            V = (E_total − E*)²
+
+        decreases under the control law
+
+            F = −k_energy · ΔE_total · ẋ_cart
+
+        where ΔE_total = E_total − E* (negative when energy is below target).
+
+        Derivation: dE_total/dt = F_cart · ẋ_cart (external power = F·v).
+        Choosing F = −k · ΔE · ẋ  gives  V̇ = −2k · ΔE² · ẋ² ≤ 0. ✓
+
+        A wall-proximity factor suppresses the pumping near the rail ends so
+        the centering term can bring the cart back into bounds.
+
+        Parameters
+        ----------
+        state : [x, θ1, θ2, θ3, ẋ, θ̇1, θ̇2, θ̇3]
+        dt    : Unused (stateless controller).
+        x_ref : Desired cart centre position [m].
+
+        Returns
+        -------
+        force : Control force [N], clamped to ±max_force.
+        """
+        x, th1, th2, th3, dx, dth1, dth2, dth3 = state
+        p = self._p
+
+        # Total-energy error: negative when below upright target
+        dE = self.physics.total_energy(state) - self._E_star
+
+        # Lyapunov-based pumping: F = −k · ΔE · ẋ
+        F_pump = -self.k_energy * dE * dx
+
+        # Wall-proximity factor: smoothly suppress pumping near rail ends
+        x_half = (p.x_max - p.x_min) / 2.0
+        if x_half > 0:
+            x_norm     = (x - x_ref) / x_half       # ∈ [−1, +1]
+            wall_factor = max(0.0, 1.0 - x_norm ** 4)
+        else:
+            wall_factor = 1.0
+        F_pump *= wall_factor
+
+        # Strong restoring force keeps the cart near the centre of the rail
+        F_centre = -self.cart_k * (x - x_ref) - self.cart_d * dx
+
+        total = F_pump + F_centre
+        return float(np.clip(total, -self.max_force, self.max_force))
 
 
 @dataclass
@@ -1466,18 +1670,376 @@ def config_secondary_motor() -> tuple:
     return params, motor, controller, initial_state, False
 
 
+def config_swing_up() -> tuple:
+    """
+    Configuration E — Swing-up from hanging to balanced (ideal actuator).
+
+    All three links start hanging straight down (θ ≈ π) with a tiny
+    perturbation to break exact symmetry.  A SwingUpController uses the
+    energy-pumping method to swing the links up toward the upright position.
+
+    This configuration is used automatically by run_interactive() and can
+    also be run non-interactively for a quick end-to-end test.  When running
+    interactively the simulation pauses at the hanging state until the user
+    presses Start.
+    """
+    params = SystemParameters(
+        M_cart=2.0,
+        l1=0.30, m1=0.15,
+        l2=0.25, m2=0.10,
+        l3=0.20, m3=0.08,
+    )
+    motor = MotorModel()
+    physics = TriplePendulumPhysics(params)
+
+    controller = SwingUpController(
+        physics=physics,
+        k_energy=50.0,
+        max_force=300.0,
+        switch_angle_deg=20.0,
+        cart_k=100.0,
+        cart_d=20.0,
+    )
+
+    # Hanging down with a tiny perturbation so the symmetry is broken
+    initial_state = np.array([
+        0.0,
+        np.pi - np.radians(2.0),   # θ1: 2° off the hanging vertical
+        np.pi - np.radians(1.0),   # θ2: 1° off
+        np.pi - np.radians(0.5),   # θ3: 0.5° off
+        0.0, 0.0, 0.0, 0.0,
+    ])
+    return params, motor, controller, initial_state, False
+
+
 # Map of named configurations for easy selection on the command line
 CONFIGURATIONS = {
     "free_swing":       config_free_swing,
     "pd_stabilise":     config_pd_stabilise,
     "longer_links":     config_longer_links,
     "secondary_motor":  config_secondary_motor,
+    "swing_up":         config_swing_up,
 }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 8 — main()
+# SECTION 8 — run_interactive() and main()
 # ══════════════════════════════════════════════════════════════════════════════
+
+def run_interactive(
+    dt: float = 0.01,
+    show_plots: bool = True,
+) -> "animation.FuncAnimation":
+    """
+    Interactive real-time simulation with Start and Reset buttons.
+
+    The triple pendulum is shown in the hanging-down position (θ = π for all
+    links) when the window opens.  Click **▶ Start** to begin the energy-based
+    swing-up sequence.  The simulation automatically switches to the LQR
+    balancing controller once all three links are within 20° of upright.
+    Click **↺ Reset** at any time to stop the simulation and return to the
+    hanging start state.
+
+    Two live plots on the right side of the window show the current link
+    angles and the applied control force as the simulation runs.
+
+    Parameters
+    ----------
+    dt         : Control / animation time step [s] (default 0.01 → 100 Hz).
+    show_plots : If True, call plt.show() (blocks until the window is closed).
+
+    Returns
+    -------
+    anim : The FuncAnimation object (kept alive by the figure).
+    """
+    from matplotlib.widgets import Button as MplButton
+
+    # ── Physics and controllers ────────────────────────────────────────────────
+    params = SystemParameters(
+        M_cart=2.0,
+        l1=0.30, m1=0.15,
+        l2=0.25, m2=0.10,
+        l3=0.20, m3=0.08,
+    )
+    physics = TriplePendulumPhysics(params)
+    p = params
+
+    print("Computing LQR gains for balancing phase…")
+    lqr = LQRController(
+        physics=physics,
+        Q_diag=[10.0, 2000.0, 2000.0, 2000.0, 1.0, 100.0, 100.0, 100.0],
+        R=0.001,
+        max_force=600.0,
+    )
+    swing_up = SwingUpController(
+        physics=physics,
+        k_energy=50.0,
+        max_force=300.0,
+        switch_angle_deg=20.0,
+        cart_k=100.0,
+        cart_d=20.0,
+    )
+
+    # ── Initial state: all links hanging straight down ─────────────────────────
+    _INITIAL = np.array([
+        0.0,
+        np.pi - np.radians(2.0),   # θ1: 2° off hanging vertical (breaks symmetry)
+        np.pi - np.radians(1.0),   # θ2: 1° off
+        np.pi - np.radians(0.5),   # θ3: 0.5° off
+        0.0, 0.0, 0.0, 0.0,        # all velocities zero
+    ])
+
+    # ── Mutable simulation state (lists so nested functions can write to them) ─
+    state    = [_INITIAL.copy()]   # [0] = current 8-element state vector
+    running  = [False]             # [0] = True while simulation is active
+    phase    = ["idle"]            # [0] = 'idle' | 'swinging_up' | 'balancing'
+    sim_time = [0.0]               # [0] = elapsed simulation time [s]
+
+    t_history  : List[float] = []
+    th1_history: List[float] = []
+    th2_history: List[float] = []
+    th3_history: List[float] = []
+    F_history  : List[float] = []
+    MAX_HIST = 500  # rolling-window length (frames kept in the live plots)
+
+    # ── Figure layout ──────────────────────────────────────────────────────────
+    total_len = p.l1 + p.l2 + p.l3
+    margin    = 0.15
+
+    fig = plt.figure(figsize=(13, 7))
+    fig.suptitle(
+        "Triple Inverted Pendulum — Interactive Simulation\n"
+        "Start hanging ↓  →  swing-up  →  balance ↑",
+        fontsize=11,
+    )
+
+    # Left panel: pendulum animation
+    ax_anim = fig.add_axes([0.04, 0.13, 0.52, 0.80])
+    ax_anim.set_xlim(p.x_min - margin, p.x_max + margin)
+    ax_anim.set_ylim(-total_len - margin, total_len + margin)
+    ax_anim.set_aspect("equal")
+    ax_anim.set_xlabel("Cart position x [m]")
+    ax_anim.set_ylabel("Height [m]")
+    ax_anim.axhline(0.0,     color="gray",   linewidth=0.8, linestyle="--")
+    ax_anim.axvline(p.x_min, color="salmon", linewidth=1,   linestyle=":")
+    ax_anim.axvline(p.x_max, color="salmon", linewidth=1,   linestyle=":")
+    ax_anim.plot([p.x_min, p.x_max], [0, 0], "k-", linewidth=4, zorder=1)
+
+    # Cart rectangle and pendulum links
+    cart_w, cart_h = 0.12, 0.06
+    cart_patch = plt.Rectangle(
+        (-cart_w / 2, -cart_h), cart_w, cart_h,
+        fc="steelblue", ec="navy", zorder=3,
+    )
+    ax_anim.add_patch(cart_patch)
+
+    colors = ["tomato", "goldenrod", "mediumseagreen"]
+    link_lines = [
+        ax_anim.plot([], [], "-o", color=c, linewidth=3, markersize=6, zorder=4)[0]
+        for c in colors
+    ]
+    pivot_dot = ax_anim.plot([], [], "ko", markersize=8, zorder=5)[0]
+
+    # Text overlays
+    time_text = ax_anim.text(
+        0.02, 0.97, "Press  \u25b6 Start  to begin",
+        transform=ax_anim.transAxes, fontsize=10, va="top",
+    )
+    phase_text = ax_anim.text(
+        0.02, 0.91, "",
+        transform=ax_anim.transAxes, fontsize=9, va="top", color="royalblue",
+    )
+    angle_text = ax_anim.text(
+        0.70, 0.97, "",
+        transform=ax_anim.transAxes, fontsize=9, va="top", family="monospace",
+    )
+
+    # Right panel — live angle plot
+    ax_th = fig.add_axes([0.60, 0.57, 0.38, 0.35])
+    ax_th.set_ylabel("Angle [°]")
+    ax_th.set_title("Link Angles (normalised to ±180°)", fontsize=9)
+    ax_th.axhline(0, color="gray", linewidth=0.8, linestyle="--")
+    ax_th.grid(True, alpha=0.3)
+    line_th1, = ax_th.plot([], [], color="tomato",         label="θ1 (bottom)")
+    line_th2, = ax_th.plot([], [], color="goldenrod",      label="θ2 (middle)")
+    line_th3, = ax_th.plot([], [], color="mediumseagreen", label="θ3 (top)")
+    ax_th.legend(fontsize=8, loc="upper right")
+
+    # Right panel — live force plot
+    ax_f = fig.add_axes([0.60, 0.13, 0.38, 0.35])
+    ax_f.set_ylabel("Force [N]")
+    ax_f.set_xlabel("Time [s]")
+    ax_f.set_title("Control Force", fontsize=9)
+    ax_f.axhline(0, color="gray", linewidth=0.8, linestyle="--")
+    ax_f.grid(True, alpha=0.3)
+    line_f, = ax_f.plot([], [], color="purple", label="F_cart")
+    ax_f.legend(fontsize=8, loc="upper right")
+
+    # ── Buttons ────────────────────────────────────────────────────────────────
+    ax_btn_start = fig.add_axes([0.10, 0.02, 0.16, 0.07])
+    ax_btn_reset = fig.add_axes([0.30, 0.02, 0.16, 0.07])
+    btn_start = MplButton(ax_btn_start, "\u25b6  Start")
+    btn_reset = MplButton(ax_btn_reset, "\u21ba  Reset")
+
+    def _start_cb(event):
+        if not running[0]:
+            running[0] = True
+            phase[0] = "swinging_up"
+            btn_start.label.set_text("Running\u2026")
+            fig.canvas.draw_idle()
+
+    def _reset_cb(event):
+        state[0] = _INITIAL.copy()
+        running[0] = False
+        phase[0] = "idle"
+        sim_time[0] = 0.0
+        t_history.clear()
+        th1_history.clear()
+        th2_history.clear()
+        th3_history.clear()
+        F_history.clear()
+        btn_start.label.set_text("\u25b6  Start")
+        time_text.set_text("Press  \u25b6 Start  to begin")
+        phase_text.set_text("")
+        angle_text.set_text("")
+        line_th1.set_data([], [])
+        line_th2.set_data([], [])
+        line_th3.set_data([], [])
+        line_f.set_data([], [])
+        _draw_pendulum(state[0])
+        fig.canvas.draw_idle()
+
+    btn_start.on_clicked(_start_cb)
+    btn_reset.on_clicked(_reset_cb)
+
+    # ── Pendulum drawing helper ────────────────────────────────────────────────
+    def _draw_pendulum(s: np.ndarray) -> None:
+        tips   = physics.tip_positions(s)
+        cart_x = tips["cart"][0]
+        cart_patch.set_xy((cart_x - cart_w / 2, -cart_h))
+        pivot_dot.set_data([cart_x], [0.0])
+        link_lines[0].set_data(
+            [cart_x,         tips["tip1"][0]],
+            [0.0,             tips["tip1"][1]],
+        )
+        link_lines[1].set_data(
+            [tips["tip1"][0], tips["tip2"][0]],
+            [tips["tip1"][1], tips["tip2"][1]],
+        )
+        link_lines[2].set_data(
+            [tips["tip2"][0], tips["tip3"][0]],
+            [tips["tip2"][1], tips["tip3"][1]],
+        )
+
+    # Draw the initial hanging state immediately so the window is not blank
+    _draw_pendulum(_INITIAL)
+
+    # ── Animation update callback ──────────────────────────────────────────────
+    _static_artists = (
+        link_lines + [cart_patch, pivot_dot, time_text, phase_text, angle_text]
+    )
+
+    def _update(_frame):
+        if not running[0]:
+            return _static_artists
+
+        s = state[0]
+
+        # Phase-transition logic
+        if phase[0] == "swinging_up":
+            ctrl = swing_up
+            if swing_up.is_near_upright(s):
+                phase[0] = "balancing"
+                lqr.reset()
+        elif phase[0] == "balancing":
+            ctrl = lqr
+            # Fall back to swing-up if any link drifts too far from upright
+            if any(
+                abs((th + np.pi) % (2 * np.pi) - np.pi) > np.radians(35)
+                for th in s[1:4]
+            ):
+                phase[0] = "swinging_up"
+        else:
+            return _static_artists
+
+        # Integrate one control step (constant force over [0, dt])
+        F = ctrl.compute(s, dt)
+
+        def _ode(t_local: float, s_local: np.ndarray, _F: float = F) -> np.ndarray:
+            return physics.equations_of_motion(s_local, _F)
+
+        sol = solve_ivp(
+            _ode, [0.0, dt], s,
+            method="RK45", rtol=1e-6, atol=1e-8,
+        )
+        if sol.success:
+            state[0] = sol.y[:, -1]
+        sim_time[0] += dt
+        s = state[0]
+
+        # Record normalised angles for the live plot
+        th1_n = (s[1] + np.pi) % (2 * np.pi) - np.pi
+        th2_n = (s[2] + np.pi) % (2 * np.pi) - np.pi
+        th3_n = (s[3] + np.pi) % (2 * np.pi) - np.pi
+
+        t_history.append(sim_time[0])
+        th1_history.append(np.degrees(th1_n))
+        th2_history.append(np.degrees(th2_n))
+        th3_history.append(np.degrees(th3_n))
+        F_history.append(F)
+
+        # Trim rolling window
+        if len(t_history) > MAX_HIST:
+            t_history.pop(0)
+            th1_history.pop(0)
+            th2_history.pop(0)
+            th3_history.pop(0)
+            F_history.pop(0)
+
+        # Draw pendulum geometry
+        _draw_pendulum(s)
+
+        # Update text overlays
+        time_text.set_text(f"t = {sim_time[0]:.2f} s")
+        phase_labels = {
+            "swinging_up": "\u26a1 Swinging up\u2026",
+            "balancing":   "\u2713 Balancing",
+        }
+        phase_text.set_text(phase_labels.get(phase[0], ""))
+        angle_text.set_text(
+            f"\u03b81 = {np.degrees(th1_n):+6.1f}\u00b0\n"
+            f"\u03b82 = {np.degrees(th2_n):+6.1f}\u00b0\n"
+            f"\u03b83 = {np.degrees(th3_n):+6.1f}\u00b0"
+        )
+
+        # Update live plots
+        t_arr = list(t_history)
+        line_th1.set_data(t_arr, list(th1_history))
+        line_th2.set_data(t_arr, list(th2_history))
+        line_th3.set_data(t_arr, list(th3_history))
+        ax_th.relim()
+        ax_th.autoscale_view()
+
+        line_f.set_data(t_arr, list(F_history))
+        ax_f.relim()
+        ax_f.autoscale_view()
+
+        return _static_artists
+
+    anim = animation.FuncAnimation(
+        fig, _update,
+        interval=10,             # ~100 Hz target; actual speed depends on host
+        blit=False,              # blit=False required because axes limits change
+        cache_frame_data=False,
+    )
+    # Keep a reference on the figure so the animation is not garbage-collected
+    fig._anim_ref = anim  # type: ignore[attr-defined]
+
+    if show_plots:
+        plt.show()
+
+    return anim
+
 
 def main(
     config_name: str = "pd_stabilise",
@@ -1487,7 +2049,8 @@ def main(
     save_animation: Optional[str] = None,
     save_plot: Optional[str] = None,
     show_plots: bool = True,
-) -> SimulationResult:
+    interactive: bool = False,
+) -> Optional[SimulationResult]:
     """
     Run the triple-inverted-pendulum simulation with a named configuration.
 
@@ -1500,10 +2063,14 @@ def main(
     save_animation : File path to save animation (e.g. 'anim.gif'), or None.
     save_plot      : File path to save time-series figure, or None.
     show_plots     : If True, call plt.show() at the end.
+    interactive    : If True, launch the interactive swing-up GUI (ignores all
+                     other parameters except dt_output and show_plots); returns
+                     None in this case because no batch result is produced.
 
     Returns
     -------
-    SimulationResult : All time-series data.
+    SimulationResult or None : Time-series data for batch runs, or None when
+                               interactive=True (GUI mode produces no batch result).
 
     How to add a new configuration
     --------------------------------
@@ -1513,6 +2080,9 @@ def main(
     2. Add it to the CONFIGURATIONS dict below.
     3. Call  main(config_name='mytest')  or pass --config mytest on the CLI.
     """
+    if interactive:
+        run_interactive(dt=dt_output, show_plots=show_plots)
+        return None
     if config_name not in CONFIGURATIONS:
         raise ValueError(
             f"Unknown configuration '{config_name}'. "
@@ -1626,6 +2196,14 @@ if __name__ == "__main__":
         "--no-show", action="store_true",
         help="Do not call plt.show() (useful for headless / script use).",
     )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help=(
+            "Launch the interactive swing-up GUI.  "
+            "The pendulum starts hanging; press Start to swing up and balance."
+        ),
+    )
     args = parser.parse_args()
 
     main(
@@ -1636,4 +2214,5 @@ if __name__ == "__main__":
         save_animation=args.save_anim,
         save_plot=args.save_plot,
         show_plots=not args.no_show,
+        interactive=args.interactive,
     )
