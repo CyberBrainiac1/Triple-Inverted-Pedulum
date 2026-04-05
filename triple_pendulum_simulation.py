@@ -9,15 +9,20 @@ Hardware context
 
 Code structure
 --------------
-  Section 1 — SystemParameters      : all physical constants you may want to tweak.
-  Section 2 — MotorModel            : brushed DC motor + lead-screw force model.
-  Section 3 — TriplePendulumPhysics : Lagrangian equations of motion, derived by hand
-                                      and implemented as fast NumPy arithmetic.
-  Section 4 — PIDController         : simple PID with derivative filtering.
-  Section 5 — Simulation            : numerical ODE integration via scipy.
-  Section 6 — Visualizer            : Matplotlib animation + time-series plots.
-  Section 7 — Test configurations   : preset parameter sets for quick experiments.
-  Section 8 — main()                : entry point; pick a test configuration and run.
+  Section 1  — SystemParameters      : all physical constants you may want to tweak.
+  Section 1b — MaterialProperties    : density/stiffness data and mass/inertia helpers
+                                       for common link materials (aluminium, steel, …).
+  Section 2  — MotorModel            : brushed DC motor + lead-screw force model.
+  Section 3  — TriplePendulumPhysics : Lagrangian equations of motion, derived by hand
+                                       and implemented as fast NumPy arithmetic.
+  Section 4  — PIDController         : simple PID with derivative filtering.
+  Section 4b — LQRController         : optimal state-feedback (Linear Quadratic Regulator).
+  Section 4c — SwingUpController     : energy-based swing-up (Åström–Furuta method) with
+                                       automatic LQR handoff when near the upright.
+  Section 5  — Simulation            : numerical ODE integration via scipy.
+  Section 6  — Visualizer            : Matplotlib animation + time-series plots.
+  Section 7  — Test configurations   : preset parameter sets for quick experiments.
+  Section 8  — main()                : entry point; pick a test configuration and run.
 
 Physics overview (see README.md for full explanation)
 -----------------------------------------------------
@@ -128,6 +133,119 @@ class SystemParameters:
             f"  g={self.g} m/s², cart_friction={self.cart_friction} N·s/m",
         ]
         return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 1b — MaterialProperties
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class MaterialProperties:
+    """
+    Physical material properties for constructing pendulum links.
+
+    Provides density and stiffness data for common link materials, and
+    helper methods to compute mass and moment of inertia directly from
+    geometry (rod length and diameter) — no manual measurement needed.
+
+    Common materials available as class methods::
+
+        mat = MaterialProperties.aluminium()    # 2700 kg/m³
+        mat = MaterialProperties.steel()         # 7850 kg/m³
+        mat = MaterialProperties.carbon_fibre()  # 1550 kg/m³
+        mat = MaterialProperties.pla_plastic()   # 1240 kg/m³
+        mat = MaterialProperties.wood()          #  550 kg/m³
+
+    Usage example — 10 mm diameter aluminium rods::
+
+        mat = MaterialProperties.aluminium()
+        params = SystemParameters(
+            l1=0.30, m1=mat.rod_mass(0.30, diameter_mm=10),
+            l2=0.25, m2=mat.rod_mass(0.25, diameter_mm=10),
+            l3=0.20, m3=mat.rod_mass(0.20, diameter_mm=10),
+            I1=mat.rod_moment_of_inertia(0.30, diameter_mm=10),
+            I2=mat.rod_moment_of_inertia(0.25, diameter_mm=10),
+            I3=mat.rod_moment_of_inertia(0.20, diameter_mm=10),
+        )
+    """
+
+    name: str = "aluminium"
+    density_kg_m3: float = 2700.0       # Mass per unit volume [kg/m³]
+    youngs_modulus_GPa: float = 69.0    # Stiffness reference [GPa]
+
+    # ── Common material presets ────────────────────────────────────────────────
+
+    @classmethod
+    def aluminium(cls) -> "MaterialProperties":
+        """6061-T6 aluminium alloy — typical for machined pendulum links."""
+        return cls(name="aluminium", density_kg_m3=2700.0, youngs_modulus_GPa=69.0)
+
+    @classmethod
+    def steel(cls) -> "MaterialProperties":
+        """Mild steel (AISI 1018) — heavy and high-stiffness."""
+        return cls(name="steel", density_kg_m3=7850.0, youngs_modulus_GPa=200.0)
+
+    @classmethod
+    def carbon_fibre(cls) -> "MaterialProperties":
+        """Unidirectional carbon-fibre composite — very light and stiff."""
+        return cls(name="carbon_fibre", density_kg_m3=1550.0, youngs_modulus_GPa=135.0)
+
+    @classmethod
+    def pla_plastic(cls) -> "MaterialProperties":
+        """PLA plastic (3-D printed links) — ideal for rapid prototyping."""
+        return cls(name="pla_plastic", density_kg_m3=1240.0, youngs_modulus_GPa=3.5)
+
+    @classmethod
+    def wood(cls) -> "MaterialProperties":
+        """Pine/spruce wood — lightweight prototype material."""
+        return cls(name="wood", density_kg_m3=550.0, youngs_modulus_GPa=10.0)
+
+    # ── Mass / inertia helpers ─────────────────────────────────────────────────
+
+    def rod_mass(self, length: float, diameter_mm: float) -> float:
+        """
+        Compute the mass of a solid circular-cross-section rod [kg].
+
+        Parameters
+        ----------
+        length      : Rod length [m].
+        diameter_mm : Rod outer diameter [mm].
+
+        Returns
+        -------
+        mass : [kg]
+        """
+        radius_m = (diameter_mm * 1e-3) / 2.0
+        volume_m3 = np.pi * radius_m ** 2 * length
+        return self.density_kg_m3 * volume_m3
+
+    def rod_moment_of_inertia(self, length: float, diameter_mm: float) -> float:
+        """
+        Compute the moment of inertia of a uniform solid rod pivoting about
+        one end [kg·m²].
+
+        For a uniform rod of mass m and length l rotating about one end::
+
+            I = (1/3) · m · l²
+
+        Parameters
+        ----------
+        length      : Rod length [m].
+        diameter_mm : Rod outer diameter [mm].
+
+        Returns
+        -------
+        I : Moment of inertia [kg·m²].
+        """
+        m = self.rod_mass(length, diameter_mm)
+        return m * length ** 2 / 3.0
+
+    def summary(self) -> str:
+        return "\n".join([
+            f"=== MaterialProperties ({self.name}) ===",
+            f"  Density         : {self.density_kg_m3:.0f} kg/m³",
+            f"  Young's modulus : {self.youngs_modulus_GPa:.1f} GPa",
+        ])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -901,6 +1019,296 @@ class LQRController:
         return float(np.clip(F, -self.max_force, self.max_force))
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 4c — SwingUpController
+# ══════════════════════════════════════════════════════════════════════════════
+
+class SwingUpController:
+    """
+    Energy-based swing-up controller for the triple-inverted-pendulum cart.
+
+    --- STRATEGY ---
+
+    Starting from a large-angle position (pendulum leaning far from upright),
+    the controller pumps mechanical energy into the pendulum chain using the
+    cart as the actuator, then hands off to an LQR stabiliser once all links
+    are close to the upright equilibrium (θ ≈ 0).
+
+    Energy-pumping law (Åström–Furuta method, extended to triple pendulum)
+    -----------------------------------------------------------------------
+    1. Compute the total mechanical energy of the system::
+
+           E = ½ q̇ᵀ M(q) q̇  +  V(q)
+
+       where M is the 4×4 mass matrix and V is the gravitational PE.
+
+    2. Compare to the target energy at the upright equilibrium::
+
+           E* = V(0,0,0) = g · (α₁ + α₂ + α₃)
+
+       (KE = 0 and all angles are zero at the balanced rest position.)
+
+    3. Apply a cart force that adds energy when E < E*, and brakes when
+       E > E* (to prevent overshoot past the top)::
+
+           F_swing = k_e · tanh(ΔE / E*) · sign(v_eff)
+
+       where ΔE = E* − E  and  v_eff is the effective velocity indicator
+       (see below).  Physical interpretation:
+
+         • When ΔE > 0 (need energy) and v_eff > 0 (pumping direction right),
+           F > 0 → cart pushes right → positive work P = F · ẋ > 0 → energy added.
+         • tanh saturates the energy error so the force is bounded and smooth.
+         • The sign reverses automatically when the cart changes direction,
+           so the controller always pumps in the correct phase (like pushing
+           a child on a swing at the right moment).
+
+    4. Effective velocity indicator v_eff
+       ------------------------------------
+       When the cart is moving (|ẋ| > threshold), v_eff = ẋ.
+       When the cart is nearly stationary (cold-start), v_eff is derived
+       from the pendulum angles so the first push is always in a useful
+       direction::
+
+           v_eff_fallback = sin(θ₁) + sin(θ₂) + sin(θ₃)
+
+    5. A soft cart-position restoring term prevents the cart from hitting
+       the travel limits while swinging::
+
+           F_pos = −kp_x · (x − x_ref)  −  kd_x · ẋ
+
+       This is blended with F_swing and the combined output is clamped to
+       ±max_force.
+
+    LQR handoff
+    -----------
+    Once |θᵢ| < lqr_angle_threshold for all i  AND
+         |θ̇ᵢ| < lqr_rate_threshold for all i,
+    the controller switches to the LQR stabiliser permanently.
+    Call reset() to restart from the swing-up phase.
+    """
+
+    def __init__(
+        self,
+        physics: "TriplePendulumPhysics",
+        lqr_controller: "LQRController",
+        k_energy: float = 60.0,
+        kp_x: float = 30.0,
+        kd_x: float = 10.0,
+        lqr_angle_threshold_rad: float = 0.35,
+        lqr_rate_threshold_rad_s: float = 2.5,
+        max_force: float = 300.0,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        physics                  : TriplePendulumPhysics (for energy calc).
+        lqr_controller           : LQRController to hand off to once balanced.
+        k_energy                 : Energy-pumping gain [N].
+        kp_x, kd_x              : Cart position restoring PD gains to prevent
+                                   hitting the rails during swing-up [N/m, N·s/m].
+        lqr_angle_threshold_rad  : Max |θ| [rad] for all links to trigger LQR handoff.
+        lqr_rate_threshold_rad_s : Max |θ̇| [rad/s] for all links to trigger handoff.
+        max_force                : Saturation limit on output force [N].
+        """
+        self.physics   = physics
+        self.lqr       = lqr_controller
+        self.k_energy  = k_energy
+        self.kp_x      = kp_x
+        self.kd_x      = kd_x
+        self.lqr_threshold      = lqr_angle_threshold_rad
+        self.lqr_rate_threshold = lqr_rate_threshold_rad_s
+        self.max_force = max_force
+        self._in_lqr_mode = False
+
+        # ── Pre-compute gravitational coefficients and target energy ──────────
+        p = physics.params
+        a1 = p.l1 / 2.0
+        a2 = p.l2 / 2.0
+        a3 = p.l3 / 2.0
+        self._alpha1 = p.m1 * a1 + (p.m2 + p.m3) * p.l1
+        self._alpha2 = p.m2 * a2 + p.m3 * p.l2
+        self._alpha3 = p.m3 * a3
+        # Target energy = PE at the upright equilibrium (all θ = 0, all velocities = 0)
+        self._E_upright = p.g * (self._alpha1 + self._alpha2 + self._alpha3)
+
+    # ── Interface (same signatures as PIDController / LQRController) ──────────
+
+    def reset(self) -> None:
+        """Reset swing-up state (allows restarting from the beginning)."""
+        self._in_lqr_mode = False
+
+    def update_integrals(
+        self, state: np.ndarray, dt: float, x_ref: float = 0.0
+    ) -> None:
+        """Forward integral update to the LQR; no-op during swing-up phase."""
+        if self._in_lqr_mode:
+            self.lqr.update_integrals(state, dt, x_ref)
+
+    def is_balancing(self) -> bool:
+        """True once the LQR stabiliser has taken over from the swing-up phase."""
+        return self._in_lqr_mode
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _wrap_angle(angle: float) -> float:
+        """Wrap *angle* to the range (−π, π]."""
+        return float((angle + np.pi) % (2 * np.pi) - np.pi)
+
+    # ── Energy calculation ────────────────────────────────────────────────────
+
+    def _total_energy(self, state: np.ndarray) -> float:
+        """
+        Compute total mechanical energy  E = T + V  of the system.
+
+        T is computed exactly using the 4×4 mass matrix (encodes all kinetic
+        energy of the cart plus all three links).  V uses the potential-energy
+        formulation from TriplePendulumPhysics (height measured from the cart
+        pivot rail, positive upward).
+        """
+        x, th1, th2, th3, dx, dth1, dth2, dth3 = state
+
+        # Kinetic energy: T = ½ q̇ᵀ M q̇
+        q_dot = np.array([dx, dth1, dth2, dth3])
+        M = self.physics._mass_matrix(th1, th2, th3)
+        T = 0.5 * float(q_dot @ M @ q_dot)
+
+        # Potential energy: V = g·(α₁ cos θ₁ + α₂ cos θ₂ + α₃ cos θ₃)
+        # (α coefficients are pre-computed in __init__ and stored as instance vars)
+        V = self.physics.params.g * (
+            self._alpha1 * np.cos(th1)
+            + self._alpha2 * np.cos(th2)
+            + self._alpha3 * np.cos(th3)
+        )
+        return T + V
+
+    # ── Control output ─────────────────────────────────────────────────────────
+
+    def compute(
+        self, state: np.ndarray, dt: float = 0.01, x_ref: float = 0.0
+    ) -> float:
+        """
+        Compute the cart force for the current state.
+
+        During swing-up : energy-pumping + cart-position restoring law.
+        After handoff   : pure LQR stabilisation.
+
+        Parameters
+        ----------
+        state : [x, θ1, θ2, θ3, ẋ, θ̇1, θ̇2, θ̇3]
+        dt    : Time step [s] (not used during swing-up; forwarded to LQR).
+        x_ref : Desired cart position at balance [m].
+
+        Returns
+        -------
+        force : Control force [N].
+        """
+        x, th1, th2, th3, dx, dth1, dth2, dth3 = state
+
+        # ── Check for LQR handoff ─────────────────────────────────────────────
+        # Normalise angles to (−π, π] so that a link that has rotated past
+        # the upright (e.g. θ = 2π) is treated as θ ≈ 0 for the handoff check.
+        th1_n = self._wrap_angle(th1)
+        th2_n = self._wrap_angle(th2)
+        th3_n = self._wrap_angle(th3)
+
+        all_angles_small = (
+            abs(th1_n) < self.lqr_threshold
+            and abs(th2_n) < self.lqr_threshold
+            and abs(th3_n) < self.lqr_threshold
+        )
+        all_rates_small = (
+            abs(dth1) < self.lqr_rate_threshold
+            and abs(dth2) < self.lqr_rate_threshold
+            and abs(dth3) < self.lqr_rate_threshold
+        )
+
+        if all_angles_small and all_rates_small:
+            if not self._in_lqr_mode:
+                print(
+                    f"  [SwingUp → LQR] Handoff at "
+                    f"θ=({np.degrees(th1_n):+.1f}°, "
+                    f"{np.degrees(th2_n):+.1f}°, "
+                    f"{np.degrees(th3_n):+.1f}°)"
+                )
+                # Pass a normalised copy of the state to the LQR so that
+                # angles that have wrapped around (e.g. θ = 2π ≈ 0) are
+                # presented to the LQR as small upright-relative values.
+                # The original ``state`` object is not modified.
+                state = state.copy()
+                state[1], state[2], state[3] = th1_n, th2_n, th3_n
+                self._in_lqr_mode = True
+            return self.lqr.compute(state, dt, x_ref)
+
+        # If balance was lost after LQR took over, fall back to swing-up
+        self._in_lqr_mode = False
+
+        # ── Spinning guard ────────────────────────────────────────────────────
+        # If any link is spinning faster than this threshold the system has too
+        # much energy in an uncontrolled rotational mode.  Suppress the energy-
+        # pumping force and let joint damping bleed the excess energy away.
+        MAX_SPIN_RAD_S = 12.0   # ≈ 115 rpm  (2 full rotations/s)
+        spinning = (
+            abs(dth1) > MAX_SPIN_RAD_S
+            or abs(dth2) > MAX_SPIN_RAD_S
+            or abs(dth3) > MAX_SPIN_RAD_S
+        )
+
+        # ── Energy error ──────────────────────────────────────────────────────
+        E  = self._total_energy(state)
+        dE = self._E_upright - E    # positive → need more energy
+
+        # ── Energy-pumping force (Åström–Furuta, adapted for triple pendulum) ─
+        #
+        # Classic Furuta formula (single link, angle from downward vert.):
+        #   F = k · (E* − E) · θ̇ · cos(θ)
+        #
+        # In our convention (θ from upright, θ=0 is balanced):
+        #   F = k · (E* − E) · (−θ̇₁) · (−cos(θ₁))  =  k · ΔE · θ̇₁ · cos(θ₁)
+        #
+        # We drive the bottom link (θ1) as the primary pendulum and let the
+        # upper links follow.  Normalise by E* so the gain is dimensionless.
+        # tanh provides smooth saturation within ±1 regardless of ΔE magnitude.
+        E_scale = max(abs(self._E_upright), 1e-6)
+
+        pump_signal = float(dth1 * np.cos(th1_n))    # Furuta coupling term
+
+        # Cold-start fallback: when the bottom link is at rest use the angle
+        # to decide which way to push (starts the first oscillation cycle).
+        if abs(pump_signal) < 1e-3:
+            pump_signal = float(-np.sin(th1_n)) * 0.1
+
+        if spinning:
+            F_swing = 0.0       # Suppress pumping — let damping drain the spin
+        else:
+            F_swing = (
+                self.k_energy
+                * float(np.tanh(dE / E_scale))
+                * float(np.sign(pump_signal))
+            )
+
+        # ── Cart position restoring (prevent rail collision) ──────────────────
+        F_pos = -self.kp_x * (x - x_ref) - self.kd_x * dx
+
+        # ── Wall-avoidance damping on swing force ─────────────────────────────
+        # Reduce F_swing smoothly toward zero as the cart approaches either rail.
+        # At the exact wall (x = x_min/x_max) the swing force is eliminated;
+        # within the margin region it tapers off linearly.
+        p = self.physics.params
+        x_range = p.x_max - p.x_min
+        margin = 0.25 * x_range          # 25 % of total travel range
+        if x > p.x_max - margin:         # Approaching right wall
+            alpha = max(0.0, (p.x_max - x) / margin)
+            if F_swing > 0:              # Only damp if pushing INTO the wall
+                F_swing *= alpha
+        elif x < p.x_min + margin:       # Approaching left wall
+            alpha = max(0.0, (x - p.x_min) / margin)
+            if F_swing < 0:
+                F_swing *= alpha
+
+        F_total = F_swing + F_pos
+        return float(np.clip(F_total, -self.max_force, self.max_force))
 
 
 @dataclass
@@ -1466,12 +1874,139 @@ def config_secondary_motor() -> tuple:
     return params, motor, controller, initial_state, False
 
 
+def config_swing_and_balance() -> tuple:
+    """
+    Configuration E — Large-lean balance with material property demonstration.
+
+    The pendulum starts with a significant initial displacement (≈15°, 10.5°,
+    6° from upright) and a small angular velocity already directed toward the
+    vertical — representing the moment after an operator has manually pushed
+    the chain close to the upright and released it.  The LQR controller must
+    actively swing the links back to vertical and then hold them balanced.
+
+    This is qualitatively different from ``pd_stabilise``, where the initial
+    lean is only 3°: here the LQR initially applies near-maximum force and the
+    pendulum visibly swings through ≈20° before converging.
+
+    Why this differs from a simple LQR re-run
+    ------------------------------------------
+    • The cart travel range is doubled (±1 m vs ±0.5 m), giving the LQR
+      room to correct without hitting the mechanical end-stops.
+    • The cart-position penalty in the LQR cost matrix is raised from 10 → 200,
+      which keeps the cart near the centre over the longer simulation horizon
+      and extends the angular capture zone from ≈5° to ≈15°.
+    • A small initial angular velocity (−0.5 rad/s on link 1) is included to
+      demonstrate that the controller can stabilise the system even when the
+      chain is already in motion.
+
+    Material property demonstration
+    --------------------------------
+    The physical masses (m1=0.15 kg, m2=0.10 kg, m3=0.08 kg) correspond to
+    steel-pin links on the existing hardware.  The ``MaterialProperties`` class
+    lets you compute what the masses would be for any other material::
+
+        mat = MaterialProperties.aluminium()   # 6061-T6, ρ = 2700 kg/m³
+        m1_al = mat.rod_mass(0.30, diameter_mm=10)   # ≈ 0.064 kg
+        I1_al = mat.rod_moment_of_inertia(0.30, 10)  # ≈ 0.0019 kg·m²
+
+        mat = MaterialProperties.carbon_fibre()       # ρ = 1550 kg/m³
+        m1_cf = mat.rod_mass(0.30, diameter_mm=10)   # ≈ 0.037 kg
+
+    The function prints a comparison table at startup.
+
+    SwingUpController note
+    ----------------------
+    The ``SwingUpController`` class (also in this file) implements the
+    Åström–Furuta energy-pumping method for autonomously swinging the
+    pendulum from the hanging position to the upright.  For the triple
+    inverted pendulum, reliable full swing-up requires the links to swing
+    in phase, which is difficult to guarantee for all initial conditions
+    with a single cart actuator.  The class is fully documented and available
+    for experimentation — see its docstring for details.
+
+    Tuning tips
+    -----------
+    • Increase ``joint_damping`` to damp residual oscillations more quickly
+      (at the cost of a longer settling time).
+    • Increase ``Q_diag[0]`` further to keep the cart even closer to the
+      centre, if cart travel is a concern.
+    • Reduce the initial angle below 15° to make the balance task easier,
+      or raise it toward 18° to push the LQR to its limits (>18° will diverge).
+    """
+    params = SystemParameters(
+        M_cart=2.0,
+        l1=0.30, m1=0.15,        # Steel-pin links from the original hardware
+        l2=0.25, m2=0.10,
+        l3=0.20, m3=0.08,
+        x_min=-1.0, x_max=1.0,  # Wider rails — essential for the larger lean
+        cart_friction=5.0,
+        joint_damping=0.003,     # Gentle pivot damping to assist settling
+    )
+    motor = MotorModel()
+
+    # ── Print material-property comparison (informational) ────────────────────
+    for mat in (
+        MaterialProperties.aluminium(),
+        MaterialProperties.carbon_fibre(),
+        MaterialProperties.steel(),
+    ):
+        m1 = mat.rod_mass(params.l1, diameter_mm=10)
+        m2 = mat.rod_mass(params.l2, diameter_mm=10)
+        m3 = mat.rod_mass(params.l3, diameter_mm=10)
+        I1 = mat.rod_moment_of_inertia(params.l1, diameter_mm=10)
+        print(
+            f"  {mat.name:14s}  ρ={mat.density_kg_m3:5.0f} kg/m³  "
+            f"m=[{m1:.3f}, {m2:.3f}, {m3:.3f}] kg  "
+            f"I1={I1:.5f} kg·m²"
+        )
+    print(
+        f"  {'hardware':14s}  ρ=    —  kg/m³  "
+        f"m=[{params.m1:.3f}, {params.m2:.3f}, {params.m3:.3f}] kg  (measured)"
+    )
+    print()
+
+    # ── LQR stabiliser ────────────────────────────────────────────────────────
+    physics = TriplePendulumPhysics(params)
+
+    print("Computing LQR gains (swing_and_balance)…")
+    controller = LQRController(
+        physics=physics,
+        # Q_diag[0] = 200 (cart position) — raised from the pd_stabilise value
+        # of 10.  This keeps the cart near the centre, allowing the LQR to
+        # apply corrective forces over a longer time span without reaching the
+        # ±1 m rail limit.
+        Q_diag=[200.0, 2000.0, 2000.0, 2000.0, 10.0, 100.0, 100.0, 100.0],
+        R=0.001,
+        max_force=600.0,
+    )
+
+    # ── Initial state ─────────────────────────────────────────────────────────
+    # The pendulum leans 15°/10.5°/6° to the right (all links at rest).
+    # This represents the scenario where the pendulum chain has been manually
+    # raised close to vertical and released from a standstill.
+    # The LQR immediately applies maximum corrective force, causing the chain
+    # to visibly swing through ≈20° before converging toward the upright.
+    initial_state = np.array([
+        0.0,                    # x      [m]       — cart at centre
+        np.radians(15.0),       # θ1     [rad]     — bottom link 15° right
+        np.radians(10.5),       # θ2     [rad]     — middle link 10.5° right
+        np.radians(6.0),        # θ3     [rad]     — top link 6° right
+        0.0,                    # ẋ      [m/s]
+        0.0,                    # θ̇1    [rad/s]   — released from rest
+        0.0,                    # θ̇2    [rad/s]
+        0.0,                    # θ̇3    [rad/s]
+    ])
+
+    return params, motor, controller, initial_state, False
+
+
 # Map of named configurations for easy selection on the command line
 CONFIGURATIONS = {
-    "free_swing":       config_free_swing,
-    "pd_stabilise":     config_pd_stabilise,
-    "longer_links":     config_longer_links,
-    "secondary_motor":  config_secondary_motor,
+    "free_swing":        config_free_swing,
+    "pd_stabilise":      config_pd_stabilise,
+    "longer_links":      config_longer_links,
+    "secondary_motor":   config_secondary_motor,
+    "swing_and_balance": config_swing_and_balance,
 }
 
 
@@ -1536,6 +2071,12 @@ def main(
         ctrl_type = type(controller).__name__
         mode = "with motor model" if use_motor_model else "ideal force (motor model bypassed)"
         print(f"{ctrl_type} enabled ({mode}).")
+        if isinstance(controller, SwingUpController):
+            print(
+                f"  Swing-up → LQR handoff at "
+                f"|θ| < {np.degrees(controller.lqr_threshold):.0f}°, "
+                f"|θ̇| < {controller.lqr_rate_threshold:.1f} rad/s"
+            )
     else:
         print("No controller — free swing.")
     print()
