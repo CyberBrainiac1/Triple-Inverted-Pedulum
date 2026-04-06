@@ -1,0 +1,570 @@
+<robot name="finaltripleinvertedpendulum">
+    <link name="a_1310_0016_5008_rev3">
+        <inertial>
+            <mass value="6.69621e-06" />
+            <origin xyz="2.04729e-09 -2.11378e-09 0.0104346" rpy="0 -0 0" />
+            <inertia ixx="4.88265e-10" ixy="1.39366e-11" ixz="0" iyy="4.96989e-10" iyz="0" izz="5.46236e-10" />
+        </inertial>
+        <visual>
+            <origin xyz="0 -1.39759e-34 0.002" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/a_1310_0016_5008_rev3.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_960784_0_960784_0_964706_0_000000_0_000000">
+                <texture />
+                <color rgba="0.960784 0.960784 0.964706 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="a_1310_series_hyper_hub_8mm_rex_bore_1310_0016_4008">
+        <inertial>
+            <mass value="0.0193019" />
+            <origin xyz="-0.00303757 0.00174185 0.0109524" rpy="0 -0 0" />
+            <inertia ixx="1.43249e-06" ixy="-2.14854e-08" ixz="-7.71251e-10" iyy="1.4407e-06" iyz="-9.6909e-10" izz="1.57709e-06" />
+        </inertial>
+        <visual>
+            <origin xyz="-0.00303109 0.00175 0.019875" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/a_1310_Series_Hyper_Hub_8mm_REX_Bore_1310_0016_4008.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_647059_0_647059_0_647059_0_000000_0_000000">
+                <texture />
+                <color rgba="0.647059 0.647059 0.647059 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="a_1311_series_thru_hole_sonic_hub_8mm_rex_bore_1311_0016_4008">
+        <inertial>
+            <mass value="0.0111049" />
+            <origin xyz="0.00425494 -2.13063e-13 4.48921e-13" rpy="0 -0 0" />
+            <inertia ixx="1.28741e-06" ixy="0" ixz="0" iyy="8.70825e-07" iyz="-7.0586e-08" izz="5.57393e-07" />
+        </inertial>
+        <visual>
+            <origin xyz="0.005 2.86229e-17 0.0035" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/a_1311_Series_Thru_Hole_Sonic_Hub_8mm_REX_Bore_1311_0016_4008.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_647059_0_647059_0_647059_0_000000_0_000000">
+                <texture />
+                <color rgba="0.647059 0.647059 0.647059 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="a_3501_series_lead_screw_8mm_lead_4_start_300mm_length_3501_0804_0300">
+        <inertial>
+            <mass value="0.0904651" />
+            <origin xyz="0.15 3.38125e-12 -2.60625e-11" rpy="0 -0 0" />
+            <inertia ixx="5.89098e-07" ixy="1.11346e-12" ixz="0" iyy="0.000678103" iyz="-2.81748e-14" izz="0.000678103" />
+        </inertial>
+        <visual>
+            <origin xyz="-0.325 -3.82702e-17 0" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/a_3501_Series_Lead_Screw_8mm_Lead_4_Start_300mm_Length_3501_0804_0300.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_498039_0_498039_0_498039_0_000000_0_000000">
+                <texture />
+                <color rgba="0.498039 0.498039 0.498039 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="a_3504_0804_2109">
+        <inertial>
+            <mass value="2.31037e-06" />
+            <origin xyz="-0.000358217 0.000787974 0.00450092" rpy="0 -0 0" />
+            <inertia ixx="8.12685e-11" ixy="-5.29348e-12" ixz="-4.14769e-15" iyy="9.17708e-11" iyz="-8.13517e-15" izz="1.39576e-10" />
+        </inertial>
+        <visual>
+            <origin xyz="-4.138e-16 -0.000137846 -2.77556e-18" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/a_3504_0804_2109.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_968627_0_984314_1_000000_0_000000_0_000000">
+                <texture />
+                <color rgba="0.968627 0.984314 1 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="a_3505_series_lead_screw_pattern_nut_8mm_lead_4_start_32mm_od_16mm_length_3505_0804_3216">
+        <inertial>
+            <mass value="0.0424311" />
+            <origin xyz="-0.008 0.008 0.00511937" rpy="0 -0 0" />
+            <inertia ixx="2.99105e-06" ixy="1.07118e-12" ixz="-6.42938e-14" iyy="2.99105e-06" iyz="1.41299e-14" izz="4.67062e-06" />
+        </inertial>
+        <visual>
+            <origin xyz="-0.008 0.008 0" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/a_3505_Series_Lead_Screw_Pattern_Nut_8mm_Lead_4_Start_32mm_OD_16mm_Length_3505_0804_3216.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_980392_0_713725_0_003922_0_000000_0_000000">
+                <texture />
+                <color rgba="0.980392 0.713726 0.00392157 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="a_5203_gearbox">
+        <inertial>
+            <mass value="3.51553e-05" />
+            <origin xyz="0.00800121 -0.0237636 0.00799982" rpy="0 -0 0" />
+            <inertia ixx="6.72215e-09" ixy="-8.55726e-13" ixz="-2.57643e-13" iyy="5.67897e-09" iyz="1.23124e-13" izz="6.9901e-09" />
+        </inertial>
+        <visual>
+            <origin xyz="0.0451707 -0.0928554 0.0190784" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/a_5203_gearbox.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_250980_0_250980_0_250980_0_000000_0_000000">
+                <texture />
+                <color rgba="0.25098 0.25098 0.25098 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="a_5203_gearbox_1">
+        <inertial>
+            <mass value="2.61366e-05" />
+            <origin xyz="-0.00799837 -0.0191859 0.00799976" rpy="0 -0 0" />
+            <inertia ixx="3.79085e-09" ixy="-6.60925e-13" ixz="-2.57716e-13" iyy="4.22119e-09" iyz="9.4483e-14" izz="4.0588e-09" />
+        </inertial>
+        <visual>
+            <origin xyz="0.0291707 -0.0928554 0.0190784" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/a_5203_gearbox_1.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_250980_0_250980_0_250980_0_000000_0_000000">
+                <texture />
+                <color rgba="0.25098 0.25098 0.25098 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="a_5203_shaft">
+        <inertial>
+            <mass value="0.0147926" />
+            <origin xyz="8.52104e-09 0.00312329 1.2204e-07" rpy="0 -0 0" />
+            <inertia ixx="2.00587e-06" ixy="-1.2858e-11" ixz="-2.18778e-13" iyy="1.29456e-07" iyz="-2.72841e-11" izz="2.00587e-06" />
+        </inertial>
+        <visual>
+            <origin xyz="0.0371707 -0.0898554 0.0110784" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/a_5203_Shaft.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_498039_0_498039_0_498039_0_000000_0_000000">
+                <texture />
+                <color rgba="0.498039 0.498039 0.498039 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="a_5203_shaft_1">
+        <inertial>
+            <mass value="0.0147926" />
+            <origin xyz="8.52104e-09 0.00312329 1.2204e-07" rpy="0 -0 0" />
+            <inertia ixx="2.00587e-06" ixy="-1.2858e-11" ixz="-2.18778e-13" iyy="1.29456e-07" iyz="-2.72841e-11" izz="2.00587e-06" />
+        </inertial>
+        <visual>
+            <origin xyz="0.0371707 -0.0898554 0.0110784" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/a_5203_Shaft.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_498039_0_498039_0_498039_0_000000_0_000000">
+                <texture />
+                <color rgba="0.498039 0.498039 0.498039 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="axle_part">
+        <inertial>
+            <mass value="0.000786167" />
+            <origin xyz="-3.72208e-21 2.93602e-21 0.00641495" rpy="0 -0 0" />
+            <inertia ixx="1.12801e-08" ixy="0" ixz="0" iyy="1.12801e-08" iyz="0" izz="9.87092e-10" />
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0.0032" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/Axle_Part.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_498039_0_498039_0_498039_0_000000_0_000000">
+                <texture />
+                <color rgba="0.498039 0.498039 0.498039 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="axle_part_1">
+        <inertial>
+            <mass value="0.000786167" />
+            <origin xyz="-3.72208e-21 2.93602e-21 0.00641495" rpy="0 -0 0" />
+            <inertia ixx="1.12801e-08" ixy="0" ixz="0" iyy="1.12801e-08" iyz="0" izz="9.87092e-10" />
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0.0032" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/Axle_Part.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_498039_0_498039_0_498039_0_000000_0_000000">
+                <texture />
+                <color rgba="0.498039 0.498039 0.498039 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="cylindrical_1_0" />
+    <link name="modern_robotics_matrix_12vdc_motor_5000_0002_0001_1" />
+    <link name="modern_robotics_matrix_12vdc_motor_5000_0002_0001_1_1" />
+    <link name="motor_part">
+        <inertial>
+            <mass value="0.17193" />
+            <origin xyz="0.000853314 -0.000730702 -0.0553867" rpy="0 -0 0" />
+            <inertia ixx="8.84131e-05" ixy="-8.87947e-07" ixz="2.08438e-06" iyy="8.85258e-05" iyz="-1.85267e-06" izz="3.17053e-05" />
+        </inertial>
+        <visual>
+            <origin xyz="0 0 -6.93889e-18" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/Motor_Part.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_498039_0_498039_0_498039_0_000000_0_000000">
+                <texture />
+                <color rgba="0.498039 0.498039 0.498039 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="motor_part_1">
+        <inertial>
+            <mass value="0.17193" />
+            <origin xyz="0.000853314 -0.000730702 -0.0553867" rpy="0 -0 0" />
+            <inertia ixx="8.84131e-05" ixy="-8.87947e-07" ixz="2.08438e-06" iyy="8.85258e-05" iyz="-1.85267e-06" izz="3.17053e-05" />
+        </inertial>
+        <visual>
+            <origin xyz="0 0 -6.93889e-18" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/Motor_Part.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_498039_0_498039_0_498039_0_000000_0_000000">
+                <texture />
+                <color rgba="0.498039 0.498039 0.498039 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="motor_sleeve">
+        <inertial>
+            <mass value="0.0259989" />
+            <origin xyz="-0.000559295 0.000767297 -0.017075" rpy="0 -0 0" />
+            <inertia ixx="6.79909e-06" ixy="-2.23685e-07" ixz="0" iyy="6.94291e-06" iyz="0" izz="8.68859e-06" />
+        </inertial>
+        <visual>
+            <origin xyz="-6.93889e-18 1.73472e-18 0.0055" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/Motor_Sleeve.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_980392_0_713725_0_003922_0_000000_0_000000">
+                <texture />
+                <color rgba="0.980392 0.713726 0.00392157 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="motor_sleeve_1">
+        <inertial>
+            <mass value="0.0259989" />
+            <origin xyz="-0.000559295 0.000767297 -0.017075" rpy="0 -0 0" />
+            <inertia ixx="6.79909e-06" ixy="-2.23685e-07" ixz="0" iyy="6.94291e-06" iyz="0" izz="8.68859e-06" />
+        </inertial>
+        <visual>
+            <origin xyz="-6.93889e-18 1.73472e-18 0.0055" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/Motor_Sleeve.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_980392_0_713725_0_003922_0_000000_0_000000">
+                <texture />
+                <color rgba="0.980392 0.713726 0.00392157 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="part_1">
+        <inertial>
+            <mass value="0.000158983" />
+            <origin xyz="-7.4695e-05 0.0235221 0.0507449" rpy="0 -0 0" />
+            <inertia ixx="3.22258e-07" ixy="-2.7933e-10" ixz="-1.68965e-10" iyy="1.38785e-07" iyz="-5.84789e-08" izz="2.43061e-07" />
+        </inertial>
+        <visual>
+            <origin xyz="0.016 -6.85758e-18 0.0365165" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/Part_1.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_615686_0_811765_0_929412_0_000000_0_000000">
+                <texture />
+                <color rgba="0.615686 0.811765 0.929412 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="part_2">
+        <inertial>
+            <mass value="0.000968708" />
+            <origin xyz="-2.13212e-17 -2.70859e-18 0.01905" rpy="0 -0 0" />
+            <inertia ixx="7.55174e-07" ixy="0" ixz="0" iyy="6.72022e-06" iyz="0" izz="7.24103e-06" />
+        </inertial>
+        <visual>
+            <origin xyz="-1.7057e-17 -2.87099e-18 0" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/Part_2.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_647059_0_647059_0_647059_0_000000_0_000000">
+                <texture />
+                <color rgba="0.647059 0.647059 0.647059 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="part_3">
+        <inertial>
+            <mass value="0.000153628" />
+            <origin xyz="-0.0075 0.000152492 0.0578554" rpy="0 -0 0" />
+            <inertia ixx="2.74048e-07" ixy="0" ixz="0" iyy="1.75704e-07" iyz="-4.01647e-10" izz="1.04105e-07" />
+        </inertial>
+        <visual>
+            <origin xyz="0.143 1.38778e-17 0" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/Part_3.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_231373_0_380392_0_705882_0_000000_0_000000">
+                <texture />
+                <color rgba="0.231373 0.380392 0.705882 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="part_4">
+        <inertial>
+            <mass value="0.000208653" />
+            <origin xyz="0.0270277 -0.0064301 0.0632419" rpy="0 -0 0" />
+            <inertia ixx="3.21444e-07" ixy="6.09817e-08" ixz="-4.91352e-08" iyy="4.41805e-07" iyz="1.57754e-08" izz="3.75926e-07" />
+        </inertial>
+        <visual>
+            <origin xyz="-0.143 -1.73472e-17 0" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/Part_4.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_917647_0_917647_0_917647_0_000000_0_000000">
+                <texture />
+                <color rgba="0.917647 0.917647 0.917647 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="part_5">
+        <inertial>
+            <mass value="4.49951e-05" />
+            <origin xyz="0 -0.004 -0.1" rpy="0 -0 0" />
+            <inertia ixx="1.76851e-07" ixy="0" ixz="0" iyy="1.79155e-07" iyz="0" izz="2.78342e-09" />
+        </inertial>
+        <visual>
+            <origin xyz="0.016 0.0214141 -0.029866" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/Part_5.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_768627_0_886275_0_952941_0_000000_0_000000">
+                <texture />
+                <color rgba="0.768627 0.886275 0.952941 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="part_6">
+        <inertial>
+            <mass value="3.4556e-05" />
+            <origin xyz="2.77556e-17 -0.004 -0.0749898" rpy="0 -0 0" />
+            <inertia ixx="8.09023e-08" ixy="0" ixz="0" iyy="8.26697e-08" iyz="0" izz="2.13601e-09" />
+        </inertial>
+        <visual>
+            <origin xyz="0.016 0.0294141 0.020134" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/Part_6.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_972549_0_529412_0_003922_0_000000_0_000000">
+                <texture />
+                <color rgba="0.972549 0.529412 0.00392157 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="part_7">
+        <inertial>
+            <mass value="2.40979e-05" />
+            <origin xyz="1.73472e-17 0.004 -0.0499992" rpy="0 -0 0" />
+            <inertia ixx="2.81098e-08" ixy="0" ixz="0" iyy="2.93389e-08" iyz="0" izz="1.48614e-09" />
+        </inertial>
+        <visual>
+            <origin xyz="0.016 0.0454141 0.020134" rpy="0 -0 0" />
+            <geometry>
+                <mesh filename="package://finaltripleinvertedpendulum/meshes/Part_7.gltf" scale="1 1 1" />
+            </geometry>
+            <material name="a_0_498039_0_498039_0_498039_0_000000_0_000000">
+                <texture />
+                <color rgba="0.498039 0.498039 0.498039 1" />
+            </material>
+        </visual>
+    </link>
+    <link name="planar_1_0" />
+    <link name="planar_1_1" />
+    <link name="root" />
+    <joint name="axle_0" type="continuous">
+        <origin xyz="0 -6.93889e-18 -0.0032" rpy="9.98031e-17 -2.82735e-16 0.500664" />
+        <axis xyz="0 0 -1" />
+        <parent link="motor_part" />
+        <child link="axle_part" />
+    </joint>
+    <joint name="axle_1" type="continuous">
+        <origin xyz="1.38778e-16 1.38778e-16 -0.0032" rpy="5.32826e-16 -4.13977e-16 0.162144" />
+        <axis xyz="0 0 -1" />
+        <parent link="motor_part_1" />
+        <child link="axle_part_1" />
+    </joint>
+    <joint name="cylindrical_1_1" type="prismatic">
+        <origin xyz="-0.008 0.008 0.211446" rpy="0 1.5708 2.70643" />
+        <axis xyz="-1 6.12323e-17 0" />
+        <parent link="a_3505_series_lead_screw_pattern_nut_8mm_lead_4_start_32mm_od_16mm_length_3505_0804_3216" />
+        <child link="cylindrical_1_0" />
+        <limit effort="1" velocity="1" lower="-10000" upper="10000" />
+    </joint>
+    <joint name="cylindrical_1_2" type="continuous">
+        <origin xyz="0 0 0" rpy="0 -0 0" />
+        <axis xyz="-1 6.12323e-17 0" />
+        <parent link="cylindrical_1_0" />
+        <child link="a_3501_series_lead_screw_8mm_lead_4_start_300mm_length_3501_0804_0300" />
+    </joint>
+    <joint name="fastened_10_0" type="fixed">
+        <origin xyz="-0.00303109 0.00175 0.021875" rpy="-1.5708 2.96525e-15 5.96285e-15" />
+        <axis xyz="0 -1 -2.16385e-16" />
+        <parent link="a_1310_series_hyper_hub_8mm_rex_bore_1310_0016_4008" />
+        <child link="part_5" />
+    </joint>
+    <joint name="fastened_11_0" type="fixed">
+        <origin xyz="-0.00156282 0.013675 -0.00313171" rpy="1.5708 0.584325 3.14159" />
+        <axis xyz="-0.866025 0.5 0" />
+        <parent link="a_5203_shaft" />
+        <child link="a_1310_series_hyper_hub_8mm_rex_bore_1310_0016_4008" />
+    </joint>
+    <joint name="fastened_1_0" type="fixed">
+        <origin xyz="-0.016 -0.008 0.0445165" rpy="0 -1.5708 3.90354e-16" />
+        <axis xyz="0 0 -1" />
+        <parent link="part_1" />
+        <child link="a_3505_series_lead_screw_pattern_nut_8mm_lead_4_start_32mm_od_16mm_length_3505_0804_3216" />
+    </joint>
+    <joint name="fastened_1_1" type="fixed">
+        <origin xyz="0.008 -0.0416 0.008" rpy="-1.5708 0.785398 9.42055e-16" />
+        <axis xyz="0 0 -1" />
+        <parent link="a_5203_gearbox" />
+        <child link="motor_part" />
+    </joint>
+    <joint name="fastened_1_2" type="fixed">
+        <origin xyz="-0.008 -0.03272 0.008" rpy="-1.5708 0.785398 -2.82617e-15" />
+        <axis xyz="0 0 -1" />
+        <parent link="a_5203_gearbox_1" />
+        <child link="motor_part_1" />
+    </joint>
+    <joint name="fastened_2_0" type="fixed">
+        <origin xyz="-0.008 -0.0104141 0.0743825" rpy="-3.14159 -3.46945e-17 6.77557e-18" />
+        <axis xyz="0 1 0" />
+        <parent link="part_1" />
+        <child link="a_5203_gearbox" />
+    </joint>
+    <joint name="fastened_4_0" type="fixed">
+        <origin xyz="0.3 -6.59195e-17 2.77556e-17" rpy="-1.5708 -3.88578e-16 1.5708" />
+        <axis xyz="0 0 -1" />
+        <parent link="a_3501_series_lead_screw_8mm_lead_4_start_300mm_length_3501_0804_0300" />
+        <child link="a_1310_0016_5008_rev3" />
+    </joint>
+    <joint name="fastened_5_0" type="fixed">
+        <origin xyz="-1.04083e-17 2.77556e-17 0" rpy="0 1.5708 -1.5708" />
+        <axis xyz="-1 0 0" />
+        <parent link="a_1310_0016_5008_rev3" />
+        <child link="a_1311_series_thru_hole_sonic_hub_8mm_rex_bore_1311_0016_4008" />
+    </joint>
+    <joint name="fastened_6_0" type="fixed">
+        <origin xyz="-0.143 -5.24424e-17 -2.29576e-24" rpy="-1.80489e-16 3.53401e-16 2.77556e-17" />
+        <axis xyz="-1 0 0" />
+        <parent link="part_2" />
+        <child link="part_3" />
+    </joint>
+    <joint name="fastened_7_0" type="fixed">
+        <origin xyz="0.143 4.22318e-17 1.18287e-25" rpy="4.96308e-24 1.01934e-24 3.90937e-33" />
+        <axis xyz="1 0 0" />
+        <parent link="part_2" />
+        <child link="part_4" />
+    </joint>
+    <joint name="fastened_8_0" type="fixed">
+        <origin xyz="2.87099e-18 -1.7057e-17 3.56504e-41" rpy="-6.94504e-25 1.65436e-23 -1.5708" />
+        <axis xyz="0 0 1" />
+        <parent link="root" />
+        <child link="part_2" />
+    </joint>
+    <joint name="fastened_9_0" type="fixed">
+        <origin xyz="0.014 -0.03255 0.083" rpy="-3.14159 -4.96308e-24 -1.5708" />
+        <axis xyz="0 1 0" />
+        <parent link="part_4" />
+        <child link="a_5203_gearbox_1" />
+    </joint>
+    <joint name="origin_0" type="fixed">
+        <origin xyz="2.77556e-17 -2.08167e-17 0" rpy="1.20485e-17 -1.31839e-16 -8.32667e-17" />
+        <axis xyz="0 0 1" />
+        <parent link="motor_part" />
+        <child link="modern_robotics_matrix_12vdc_motor_5000_0002_0001_1" />
+    </joint>
+    <joint name="origin_1" type="fixed">
+        <origin xyz="1.38778e-17 0 0" rpy="8.85647e-17 3.10573e-17 5.55112e-17" />
+        <axis xyz="0 0 1" />
+        <parent link="motor_part_1" />
+        <child link="modern_robotics_matrix_12vdc_motor_5000_0002_0001_1_1" />
+    </joint>
+    <joint name="planar_1_2" type="prismatic">
+        <origin xyz="0.0604459 -0.02455 0.0384835" rpy="0 0 -1.02856e-38" />
+        <axis xyz="1 0 0" />
+        <parent link="part_2" />
+        <child link="planar_1_1" />
+        <limit effort="1" velocity="1" lower="-10000" upper="10000" />
+    </joint>
+    <joint name="planar_1_3" type="prismatic">
+        <origin xyz="0 0 0" rpy="0 -0 0" />
+        <axis xyz="0 -1 0" />
+        <parent link="planar_1_1" />
+        <child link="planar_1_0" />
+        <limit effort="1" velocity="1" lower="-10000" upper="10000" />
+    </joint>
+    <joint name="planar_1_4" type="continuous">
+        <origin xyz="0 0 0" rpy="0 -0 0" />
+        <axis xyz="0 0 -1" />
+        <parent link="planar_1_0" />
+        <child link="part_1" />
+    </joint>
+    <joint name="revolute_1_0" type="continuous">
+        <origin xyz="0.008 -0.00299999 0.008" rpy="9.71128e-17 -0.301173 2.04595e-15" />
+        <axis xyz="0 -1 0" />
+        <parent link="a_5203_gearbox" />
+        <child link="a_5203_shaft" />
+    </joint>
+    <joint name="revolute_1_1" type="continuous">
+        <origin xyz="-0.008 -0.00299999 0.008" rpy="7.89685e-15 1.48115 7.94922e-15" />
+        <axis xyz="0 -1 0" />
+        <parent link="a_5203_gearbox_1" />
+        <child link="a_5203_shaft_1" />
+    </joint>
+    <joint name="revolute_1_2" type="continuous">
+        <origin xyz="-0.015 -0.02455 0.075" rpy="1.5708 0.435167 -1.5708" />
+        <axis xyz="0 0 1" />
+        <parent link="part_3" />
+        <child link="a_3504_0804_2109" />
+    </joint>
+    <joint name="revolute_2_0" type="continuous">
+        <origin xyz="9.64506e-16 -0.008 -0.2" rpy="3.14159 1.40413 3.14159" />
+        <axis xyz="0 1 2.16385e-16" />
+        <parent link="part_5" />
+        <child link="part_6" />
+    </joint>
+    <joint name="revolute_3_0" type="continuous">
+        <origin xyz="-1.11022e-16 -0.008 -0.15" rpy="-4.49301e-16 -0.568786 -3.14159" />
+        <axis xyz="0 -1 -2.16385e-16" />
+        <parent link="part_6" />
+        <child link="part_7" />
+    </joint>
+    <joint name="sleeve_0" type="fixed">
+        <origin xyz="1.38778e-17 -1.38778e-17 -0.00549999" rpy="2.85406e-16 -2.71423e-16 -3.88578e-16" />
+        <axis xyz="1.73652e-16 -3.0287e-17 1" />
+        <parent link="motor_part" />
+        <child link="motor_sleeve" />
+    </joint>
+    <joint name="sleeve_1" type="fixed">
+        <origin xyz="1.38778e-17 0 -0.00549999" rpy="8.26235e-17 -9.5124e-17 -2.498e-16" />
+        <axis xyz="1.73652e-16 -3.0287e-17 1" />
+        <parent link="motor_part_1" />
+        <child link="motor_sleeve_1" />
+    </joint>
+</robot>

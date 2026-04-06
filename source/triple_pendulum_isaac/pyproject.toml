@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "triple-pendulum-isaac"
+version = "0.1.0"
+description = "Isaac Lab direct RL tasks for balancing and swing-up of a triple inverted pendulum on a cart."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+triple_pendulum_isaac = ["tasks/direct/triple_inverted_pendulum/agents/*.yaml"]

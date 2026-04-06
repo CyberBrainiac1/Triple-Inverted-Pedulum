@@ -48,9 +48,13 @@ Dependencies: numpy, scipy, matplotlib
 # ──────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
+import sys
 import warnings
 from dataclasses import dataclass
+import json
+from pathlib import Path
 from typing import List, Optional, Tuple
+import xml.etree.ElementTree as ET
 
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
@@ -58,6 +62,20 @@ import numpy as np
 from scipy.integrate import solve_ivp
 
 warnings.filterwarnings("ignore", category=UserWarning)
+
+for _stream_name in ("stdout", "stderr"):
+    _stream = getattr(sys, _stream_name, None)
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
+
+REPO_ROOT = Path(__file__).resolve().parent
+V2_URDF_PATH = (
+    REPO_ROOT
+    / "_extracted_urdf_v2"
+    / "finaltripleinvertedpendulum"
+    / "urdf"
+    / "finaltripleinvertedpendulum.urdf"
+)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 1 — SystemParameters
@@ -89,17 +107,19 @@ class SystemParameters:
     # ── Link 1 (bottom link, attached to cart) ────────────────────────────────
     l1: float = 0.30             # Length [m]
     m1: float = 0.15             # Mass [kg]
-    # Moment of inertia about pivot (uniform rod: m*l^2/3); override if needed
-    I1: Optional[float] = None   # [kg·m²] — None → computed automatically
+    c1: Optional[float] = None   # COM distance from proximal joint [m]
+    I1: Optional[float] = None   # COM inertia about the out-of-plane axis [kg·m²]
 
     # ── Link 2 (middle link) ──────────────────────────────────────────────────
     l2: float = 0.25             # Length [m]
     m2: float = 0.10             # Mass [kg]
+    c2: Optional[float] = None
     I2: Optional[float] = None
 
     # ── Link 3 (top link) ─────────────────────────────────────────────────────
     l3: float = 0.20             # Length [m]
     m3: float = 0.08             # Mass [kg]
+    c3: Optional[float] = None
     I3: Optional[float] = None
 
     # ── Link joint damping ────────────────────────────────────────────────────
@@ -109,25 +129,116 @@ class SystemParameters:
     g: float = 9.81              # Gravitational acceleration [m/s²]
 
     def __post_init__(self) -> None:
-        """Auto-compute moments of inertia for uniform rods about their pivot."""
+        """
+        Auto-compute COM locations and COM inertias for uniform rods.
+
+        Important:
+          The rigid-body kinetic energy uses
+            T = 1/2 m v_com² + 1/2 I_com ω²
+          so `I1/I2/I3` must be moments of inertia about each link's centre of
+          mass, not about the pivot. For a uniform rod, I_com = m l² / 12.
+        """
+        if self.c1 is None:
+            self.c1 = self.l1 / 2.0
+        if self.c2 is None:
+            self.c2 = self.l2 / 2.0
+        if self.c3 is None:
+            self.c3 = self.l3 / 2.0
         if self.I1 is None:
-            # Uniform rod rotated about one end: I = m*l²/3
-            self.I1 = self.m1 * self.l1 ** 2 / 3.0
+            self.I1 = self.m1 * self.l1 ** 2 / 12.0
         if self.I2 is None:
-            self.I2 = self.m2 * self.l2 ** 2 / 3.0
+            self.I2 = self.m2 * self.l2 ** 2 / 12.0
         if self.I3 is None:
-            self.I3 = self.m3 * self.l3 ** 2 / 3.0
+            self.I3 = self.m3 * self.l3 ** 2 / 12.0
 
     def summary(self) -> str:
         lines = [
             "=== SystemParameters ===",
             f"  Cart: M={self.M_cart:.3f} kg, x∈[{self.x_min},{self.x_max}] m",
-            f"  Link1: l={self.l1:.3f} m, m={self.m1:.3f} kg, I={self.I1:.5f} kg·m²",
-            f"  Link2: l={self.l2:.3f} m, m={self.m2:.3f} kg, I={self.I2:.5f} kg·m²",
-            f"  Link3: l={self.l3:.3f} m, m={self.m3:.3f} kg, I={self.I3:.5f} kg·m²",
+            f"  Link1: l={self.l1:.3f} m, c={self.c1:.3f} m, m={self.m1:.3f} kg, I_com={self.I1:.5f} kg·m²",
+            f"  Link2: l={self.l2:.3f} m, c={self.c2:.3f} m, m={self.m2:.3f} kg, I_com={self.I2:.5f} kg·m²",
+            f"  Link3: l={self.l3:.3f} m, c={self.c3:.3f} m, m={self.m3:.3f} kg, I_com={self.I3:.5f} kg·m²",
             f"  g={self.g} m/s², cart_friction={self.cart_friction} N·s/m",
         ]
         return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class V2MechanismDimensions:
+    """Physical dimensions extracted from the uploaded V2 URDF asset."""
+
+    link1_m: float
+    link2_m: float
+    link3_m: float
+    rail_limit_m: float
+    lead_m_per_rev: float
+
+
+@dataclass(frozen=True)
+class V2MechanismDynamics:
+    """
+    Effective reduced-order dynamics extracted from the uploaded V2 URDF.
+
+    The actual CAD export contains many fixed hardware components around the
+    moving carriage and the first pendulum joint. This reduced model collapses
+    each rigidly connected moving cluster into a single body, preserving:
+      - exact V2 bar lengths
+      - effective moving cart mass
+      - link COM locations along each bar
+      - link COM inertia about the swing axis
+    """
+
+    cart_mass_kg: float
+    link1_m: float
+    link1_mass_kg: float
+    link1_com_m: float
+    link1_inertia_kgm2: float
+    link2_m: float
+    link2_mass_kg: float
+    link2_com_m: float
+    link2_inertia_kgm2: float
+    link3_m: float
+    link3_mass_kg: float
+    link3_com_m: float
+    link3_inertia_kgm2: float
+    rail_limit_m: float
+    lead_m_per_rev: float
+
+
+def load_v2_mechanism_dimensions(path: Path = V2_URDF_PATH) -> V2MechanismDimensions:
+    """
+    Extract the actual linkage lengths from the V2 URDF.
+
+    The exported V2 URDF uses the link inertial origins of `part_5/6/7`
+    at roughly the half-length points of the three passive bars, so
+    `2 * ||origin_xyz||` yields the full bar length for each link.
+
+    The raw joint limits in the CAD export are placeholder `±10000`.
+    The local simulator therefore clamps the physical x travel to `±0.14 m`,
+    which matches the real carriage stroke used elsewhere in the repo.
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"Expected V2 URDF at '{path}'.")
+
+    root = ET.parse(path).getroot()
+
+    def link_length(link_name: str) -> float:
+        link = root.find(f"link[@name='{link_name}']")
+        if link is None:
+            raise KeyError(f"Link '{link_name}' not found in '{path}'.")
+        origin = link.find("inertial/origin")
+        if origin is None:
+            raise KeyError(f"Link '{link_name}' is missing inertial/origin in '{path}'.")
+        xyz = np.array([float(part) for part in origin.attrib["xyz"].split()], dtype=float)
+        return float(2.0 * np.linalg.norm(xyz))
+
+    return V2MechanismDimensions(
+        link1_m=link_length("part_5"),
+        link2_m=link_length("part_6"),
+        link3_m=link_length("part_7"),
+        rail_limit_m=0.14,
+        lead_m_per_rev=8.0e-3,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -250,6 +361,43 @@ class MotorModel:
             f"  Max force    (at stall)  : {self.stall_force():.1f} N",
         ]
         return "\n".join(lines)
+
+
+@dataclass
+class RotaryMotorModel:
+    """
+    Brushed DC motor acting directly on a revolute joint.
+
+    The torque-speed law is the same linear DC-motor model used by the
+    lead-screw actuator, but the output is a rotary torque instead of a
+    linear carriage force.
+    """
+
+    free_speed_rpm: float = 312.0
+    stall_torque_Nm: float = 5.2
+
+    @classmethod
+    def secondary_motor(cls) -> "RotaryMotorModel":
+        return cls(free_speed_rpm=312.0, stall_torque_Nm=5.2)
+
+    def torque_from_command(self, command: float, joint_speed_rads: float = 0.0) -> float:
+        omega_free = self.free_speed_rpm * 2.0 * np.pi / 60.0
+        tau = self.stall_torque_Nm * (command - joint_speed_rads / omega_free)
+        return float(np.clip(tau, -self.stall_torque_Nm, self.stall_torque_Nm))
+
+
+@dataclass
+class ActuationCommand:
+    """
+    Two-input actuation command for the real mechanism abstraction.
+
+    `cart_force` is the desired generalised x-force prior to the lead-screw
+    motor model, while `joint1_torque` is the desired torque about the
+    driven revolute mate used for the slower secondary motor.
+    """
+
+    cart_force: float
+    joint1_torque: float = 0.0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -495,7 +643,11 @@ class TriplePendulumPhysics:
     # ── Public interface ──────────────────────────────────────────────────────
 
     def equations_of_motion(
-        self, state: np.ndarray, F_cart: float
+        self,
+        state: np.ndarray,
+        F_cart: float,
+        tau_joint1: float = 0.0,
+        joint1_sign: float = 1.0,
     ) -> np.ndarray:
         """
         Compute state derivatives [q̇, q̈] for the ODE integrator.
@@ -508,7 +660,10 @@ class TriplePendulumPhysics:
         Parameters
         ----------
         state   : [x, θ1, θ2, θ3, ẋ, θ̇1, θ̇2, θ̇3]  (8-element array)
-        F_cart  : External force applied to the cart [N] (positive = rightward)
+        F_cart     : External force applied to the cart [N] (positive = rightward)
+        tau_joint1 : Optional torque applied at the first revolute axis [N·m].
+        joint1_sign: Sign mapping from actuator torque to the generalised θ1
+                     coordinate. Use `-1.0` for the V2 slower-motor mate.
 
         Returns
         -------
@@ -534,8 +689,10 @@ class TriplePendulumPhysics:
             p.joint_damping * dth3,
         ])
 
-        # External generalised force: motor force only acts on the cart (x axis)
-        Q = np.array([F_cart, 0.0, 0.0, 0.0])
+        # External generalised force:
+        #   x-axis lead-screw force acts on q[0]
+        #   secondary motor torque acts on q[1] with a mechanism-dependent sign
+        Q = np.array([F_cart, joint1_sign * tau_joint1, 0.0, 0.0])
 
         # Solve  M · q̈ = Q − h − G − D  (standard NumPy linear solver)
         rhs = Q - h - G - D
@@ -617,6 +774,37 @@ class TriplePendulumPhysics:
         B = np.zeros((8, 1))
         B[4:, 0] = Minv[:, 0]              # cart force enters through first column of M⁻¹
 
+        return A, B
+
+    def linearise_dual_input(self, joint1_sign: float = 1.0) -> tuple:
+        """
+        Return the linearised 2-input state-space model for the real mechanism.
+
+        Inputs
+        ------
+        u[0] = cart generalised force
+        u[1] = driven torque about the slower revolute mate
+
+        `joint1_sign` maps actuator torque direction into the θ1 generalised
+        coordinate. The V2 URDF path uses `-1.0`.
+        """
+        M0 = self._mass_matrix(0.0, 0.0, 0.0)
+        Minv = np.linalg.inv(M0)
+
+        G_lin = np.diag([
+            0.0,
+            -self._alpha1 * self.params.g,
+            -self._alpha2 * self.params.g,
+            -self._alpha3 * self.params.g,
+        ])
+
+        A = np.zeros((8, 8))
+        A[:4, 4:] = np.eye(4)
+        A[4:, :4] = -Minv @ G_lin
+
+        B = np.zeros((8, 2))
+        B[4:, 0] = Minv[:, 0]
+        B[4:, 1] = joint1_sign * Minv[:, 1]
         return A, B
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -865,8 +1053,8 @@ class LQRController:
         eigs_sorted = sorted(eigs, key=lambda e: e.real)
         print("  LQR closed-loop eigenvalues (all should have Re<0 for stability):")
         for ev in eigs_sorted:
-            stability = "✓" if ev.real < 0 else "✗ UNSTABLE"
-            print(f"    {ev.real:+.3f} ± {abs(ev.imag):.3f}j  {stability}")
+            stability = "stable" if ev.real < 0 else "UNSTABLE"
+            print(f"    {ev.real:+.3f} +/- {abs(ev.imag):.3f}j  {stability}")
 
     def reset(self) -> None:
         """LQR has no internal state to reset."""
@@ -901,6 +1089,461 @@ class LQRController:
         return float(np.clip(F, -self.max_force, self.max_force))
 
 
+class DualInputLQRController:
+    """
+    Two-input LQR for the V2 mechanism abstraction.
+
+    Inputs:
+      - cart generalised force along the x stage
+      - slower secondary-motor torque about the driven revolute mate
+
+    This controller is used for the more physical local simulator path where
+    the mechanism has both the x-axis lead-screw drive and the slower
+    revolute motor active.
+    """
+
+    def __init__(
+        self,
+        physics: "TriplePendulumPhysics",
+        Q_diag: List[float],
+        R_diag: List[float],
+        max_cart_force: float = 500.0,
+        max_joint1_torque: float = 5.2,
+        joint1_sign: float = -1.0,
+        secondary_motor_model: Optional[RotaryMotorModel] = None,
+    ) -> None:
+        from scipy.linalg import solve_continuous_are
+
+        if len(Q_diag) != 8:
+            raise ValueError("DualInputLQRController expects an 8-element Q_diag.")
+        if len(R_diag) != 2:
+            raise ValueError("DualInputLQRController expects a 2-element R_diag.")
+
+        self.max_cart_force = max_cart_force
+        self.max_joint1_torque = max_joint1_torque
+        self.joint1_sign = joint1_sign
+        self.secondary_motor_model = secondary_motor_model
+
+        A, B = physics.linearise_dual_input(joint1_sign=joint1_sign)
+        Q = np.diag(Q_diag)
+        R = np.diag(R_diag)
+        P = solve_continuous_are(A, B, Q, R)
+        self.K = np.linalg.solve(R, B.T @ P)
+
+        A_cl = A - B @ self.K
+        eigs = np.linalg.eigvals(A_cl)
+        eigs_sorted = sorted(eigs, key=lambda e: e.real)
+        print("  Dual-input LQR closed-loop eigenvalues:")
+        for ev in eigs_sorted:
+            stability = "stable" if ev.real < 0 else "UNSTABLE"
+            print(f"    {ev.real:+.3f} +/- {abs(ev.imag):.3f}j  {stability}")
+
+    def reset(self) -> None:
+        pass
+
+    def update_integrals(self, state: np.ndarray, dt: float, x_ref: float = 0.0) -> None:
+        pass
+
+    def compute(
+        self, state: np.ndarray, dt: float = 0.01, x_ref: float = 0.0
+    ) -> ActuationCommand:
+        z = state.copy()
+        z[0] -= x_ref
+        u = -(self.K @ z)
+        return ActuationCommand(
+            cart_force=float(np.clip(u[0], -self.max_cart_force, self.max_cart_force)),
+            joint1_torque=float(np.clip(u[1], -self.max_joint1_torque, self.max_joint1_torque)),
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 4c — SwingUpController
+# ══════════════════════════════════════════════════════════════════════════════
+
+class SwingUpController:
+    """
+    Energy-pumping swing-up controller for the triple inverted pendulum.
+
+    Injects mechanical energy into the pendulum chain by moving the cart
+    in the direction that maximises the rate of energy increase each half-
+    cycle — identical in principle to a parent pushing a child on a swing.
+
+    Energy definition (measured relative to the all-hanging equilibrium)
+    --------------------------------------------------------------------
+    V = g · [m1·(l1/2)·(1+cos θ1)
+           + m2·(l1·(1+cos θ1) + (l2/2)·(1+cos θ2))
+           + m3·(l1·(1+cos θ1) + l2·(1+cos θ2) + (l3/2)·(1+cos θ3))]
+
+    T = ½ · (I1·θ̇1² + I2·θ̇2² + I3·θ̇3²)   [rotational KE only]
+
+    E = T + V   → 0 when all links hang still, E_ref when all upright still
+
+    Target energy at the upright equilibrium (θi = 0, θ̇i = 0):
+        E_ref = 2·g·(m1·l1/2 + m2·(l1+l2/2) + m3·(l1+l2+l3/2))
+
+    Control law
+    -----------
+    sig  = θ̇1·cos θ1 + θ̇2·cos θ2 + θ̇3·cos θ3
+    F_sw = k_sw · (E − E_ref) · sig
+
+    When E < E_ref (energy deficit):
+      • (E − E_ref) < 0
+      • sig < 0 when links rotate through bottom (cos θ ≈ −1, θ̇ > 0)
+      • Product > 0  → cart force positive (rightward) → injects energy ✓
+
+    Cart centering (prevent wall collision during swing-up):
+        F_cen = −k_x·(x − x_ref) − k_dx·ẋ
+    """
+
+    def __init__(
+        self,
+        params: SystemParameters,
+        k_sw: float = 40.0,
+        k_x: float = 30.0,
+        k_dx: float = 5.0,
+        max_force: float = 600.0,
+    ) -> None:
+        self.params = params
+        self.k_sw = k_sw
+        self.k_x = k_x
+        self.k_dx = k_dx
+        self.max_force = max_force
+        p = params
+
+        # Target energy: all links upright with zero angular velocities
+        self.E_ref = 2.0 * p.g * (
+            p.m1 * (p.l1 / 2.0)
+            + p.m2 * (p.l1 + p.l2 / 2.0)
+            + p.m3 * (p.l1 + p.l2 + p.l3 / 2.0)
+        )
+        print(f"  SwingUp: E_ref = {self.E_ref:.4f} J  (energy needed to reach upright)")
+
+    def reset(self) -> None:
+        pass  # no internal state
+
+    def update_integrals(
+        self, state: np.ndarray, dt: float, x_ref: float = 0.0
+    ) -> None:
+        pass  # no integral terms
+
+    def _energy(self, state: np.ndarray) -> float:
+        """Total mechanical energy relative to the all-hanging position [J]."""
+        p = self.params
+        _, th1, th2, th3, _, dth1, dth2, dth3 = state
+        g = p.g
+
+        # Rotational kinetic energy of the three links
+        T = 0.5 * (p.I1 * dth1 ** 2 + p.I2 * dth2 ** 2 + p.I3 * dth3 ** 2)
+
+        # Potential energy above the all-hanging reference level
+        # (1 + cos θ) = 0 at hanging (θ=π), 2 at upright (θ=0)
+        V = g * (
+            p.m1 * (p.l1 / 2.0) * (1.0 + np.cos(th1))
+            + p.m2 * (
+                p.l1 * (1.0 + np.cos(th1))
+                + (p.l2 / 2.0) * (1.0 + np.cos(th2))
+            )
+            + p.m3 * (
+                p.l1 * (1.0 + np.cos(th1))
+                + p.l2 * (1.0 + np.cos(th2))
+                + (p.l3 / 2.0) * (1.0 + np.cos(th3))
+            )
+        )
+        return T + V
+
+    def compute(
+        self, state: np.ndarray, dt: float = 0.01, x_ref: float = 0.0
+    ) -> float:
+        x, th1, th2, th3, dx, dth1, dth2, dth3 = state
+
+        # Signed energy deficit (negative → below target → need to inject energy)
+        dE = self._energy(state) - self.E_ref
+
+        # Energy injection signal: direction that maximises power into pendulum.
+        # Each term is saturated at ±max_spin so a rapidly-spinning link (which
+        # already has more than its share of energy) doesn't dominate the signal
+        # and push the cart far off-centre.
+        # Saturate angular-velocity contribution so rapidly-spinning links don't
+        # produce an enormous signal that over-pumps the system.
+        max_spin = 6.0
+        sig = (float(np.clip(dth1, -max_spin, max_spin)) * np.cos(th1)
+               + float(np.clip(dth2, -max_spin, max_spin)) * np.cos(th2)
+               + float(np.clip(dth3, -max_spin, max_spin)) * np.cos(th3))
+
+        # Self-regulating energy control:
+        #   dE < 0 → below target → pump (add energy)
+        #   dE > 0 → above target → brake (remove energy)
+        #   |dE| < 3% threshold → dead zone (let the system coast)
+        #
+        # The clamp is SYMMETRIC so braking is exactly as strong as pumping.
+        # This prevents the asymmetric over-pumping that causes runaway spin.
+        if abs(dE) < 0.03 * self.E_ref:
+            F_sw = 0.0
+        else:
+            dE_clamped = float(np.clip(dE, -self.E_ref, self.E_ref))
+            F_sw = self.k_sw * dE_clamped * sig
+
+        # Cart centering: grows super-linearly so the cart can't escape the track
+        p = self.params
+        half_track = (p.x_max - p.x_min) / 2.0
+        x_norm = (x - x_ref) / half_track        # ±1 at the rails
+        F_cen = -(self.k_x * x_norm ** 3 * half_track
+                  + self.k_x * 0.4 * (x - x_ref)) \
+                - self.k_dx * dx
+
+        return float(np.clip(F_sw + F_cen, -self.max_force, self.max_force))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 4d — HybridController  (swing-up → LQR catch)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class HybridController:
+    """
+    Two-phase hybrid controller: energy-pumping swing-up → LQR balance.
+
+    Phase 1 — SwingUpController
+    ---------------------------
+    Pumps mechanical energy into the pendulum chain.  The pendulum oscillates
+    with growing amplitude until it passes close to the upright position.
+
+    Phase 2 — LQRController  (triggered on capture)
+    -----------------------------------------------
+    Once all three link angles are within `capture_deg` of the upright AND
+    all angular velocities are below `capture_vel_rads`, control transfers
+    to the pre-computed LQR.  The LQR then holds the triple pendulum balanced
+    indefinitely.
+
+    The mode is one-way: swing_up → lqr.  Once captured, no reversion.
+
+    Adaptive capture threshold
+    --------------------------
+    If no capture occurs within `t_relax` seconds, the angle threshold is
+    widened by 50 % (capped at `max_capture_deg`) — useful for parameter
+    sets where the natural chaotic motion only briefly grazes the upright.
+    """
+
+    def __init__(
+        self,
+        swing_up: SwingUpController,
+        lqr: LQRController,
+        capture_deg: float = 20.0,
+        capture_vel_rads: float = 6.0,
+        t_relax: float = 20.0,
+        max_capture_deg: float = 30.0,
+    ) -> None:
+        self.swing_up = swing_up
+        self.lqr = lqr
+        self.capture_deg = capture_deg
+        self.capture_vel_rads = capture_vel_rads
+        self.t_relax = t_relax
+        self.max_capture_deg = max_capture_deg
+
+        self._mode: str = "swing_up"
+        self._switch_time: Optional[float] = None
+        self._t_elapsed: float = 0.0
+
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    @property
+    def switch_time(self) -> Optional[float]:
+        """Time [s] at which swing-up gave way to LQR, or None if not yet."""
+        return self._switch_time
+
+    def reset(self) -> None:
+        self._mode = "swing_up"
+        self._switch_time = None
+        self._t_elapsed = 0.0
+        self.swing_up.reset()
+        self.lqr.reset()
+
+    @staticmethod
+    def _wrap(th: float) -> float:
+        """Wrap angle to (−π, π]."""
+        return th - 2.0 * np.pi * round(th / (2.0 * np.pi))
+
+    def update_integrals(
+        self, state: np.ndarray, dt: float, x_ref: float = 0.0
+    ) -> None:
+        self._t_elapsed += dt
+
+        if self._mode == "swing_up":
+            # Adaptive threshold: loosen after t_relax seconds without capture
+            threshold = self.capture_deg
+            if self._t_elapsed > self.t_relax:
+                threshold = min(self.capture_deg * 1.5, self.max_capture_deg)
+
+            angles  = [self._wrap(float(th)) for th in state[1:4]]
+            ang_vel = state[5:8]
+
+            all_near = all(abs(a) < np.radians(threshold) for a in angles)
+            all_slow = all(abs(w) < self.capture_vel_rads for w in ang_vel)
+
+            if all_near and all_slow:
+                self._mode = "lqr"
+                self._switch_time = self._t_elapsed
+                print(
+                    f"\n  *** CAPTURED at t = {self._t_elapsed:.3f} s -> LQR engaged ***"
+                )
+                print(
+                    f"      angles  (°): "
+                    f"{[f'{np.degrees(a):+.1f}' for a in angles]}"
+                )
+                print(
+                    f"      ang vel (rad/s): "
+                    f"{[f'{float(w):+.2f}' for w in ang_vel]}"
+                )
+                self.lqr.reset()
+        else:
+            self.lqr.update_integrals(state, dt, x_ref)
+
+    def compute(
+        self, state: np.ndarray, dt: float = 0.01, x_ref: float = 0.0
+    ) -> float:
+        if self._mode == "swing_up":
+            return self.swing_up.compute(state, dt, x_ref)
+        return self.lqr.compute(state, dt, x_ref)
+
+
+@dataclass
+class PotentiometerObserverConfig:
+    """
+    Configuration for the two potentiometer channels on joints 2 and 3.
+
+    Assumptions
+    -----------
+    - Joint 1 and the cart states are otherwise observable in simulation.
+    - Joint 2 and joint 3 angles are measured with rotary potentiometers.
+    - Joint 2 and joint 3 angular velocities are estimated numerically from
+      successive angle samples and low-pass filtered.
+    """
+
+    sample_hz: float = 250.0
+    adc_bits: int = 12
+    noise_std_deg: float = 0.20
+    theta2_bias_deg: float = 0.0
+    theta3_bias_deg: float = 0.0
+    velocity_alpha: float = 0.35
+    use_true_angular_rates: bool = True
+    seed: int = 7
+
+
+class TwoPotentiometerObserver:
+    """
+    Sensor model for the upper two linkage joints.
+
+    The observer returns an 8-element state vector compatible with the
+    existing controllers:
+      [x, θ1, θ2_meas, θ3_meas, ẋ, θ̇1, θ̇2_est, θ̇3_est]
+    """
+
+    def __init__(self, config: Optional[PotentiometerObserverConfig] = None) -> None:
+        self.config = config or PotentiometerObserverConfig()
+        self._rng = np.random.default_rng(self.config.seed)
+        self._sample_period = 1.0 / max(self.config.sample_hz, 1e-6)
+        self.reset()
+
+    @staticmethod
+    def _wrap(angle: float) -> float:
+        return float((angle + np.pi) % (2.0 * np.pi) - np.pi)
+
+    def _quantize_angle(self, angle: float) -> float:
+        levels = float(2 ** max(self.config.adc_bits, 1))
+        step = 2.0 * np.pi / levels
+        return self._wrap(step * np.round(angle / step))
+
+    def _measure_angle(self, true_angle: float, bias_deg: float) -> float:
+        noise = self._rng.normal(0.0, np.radians(self.config.noise_std_deg))
+        biased = true_angle + np.radians(bias_deg) + noise
+        return self._quantize_angle(biased)
+
+    def reset(self) -> None:
+        self._time_since_sample = 0.0
+        self._last_theta2: Optional[float] = None
+        self._last_theta3: Optional[float] = None
+        self._dtheta2_est = 0.0
+        self._dtheta3_est = 0.0
+        self.last_observation: Optional[np.ndarray] = None
+
+    def observe(self, true_state: np.ndarray, dt: float) -> np.ndarray:
+        self._time_since_sample += dt
+
+        if self.last_observation is None:
+            self._time_since_sample = self._sample_period
+
+        if self._time_since_sample >= self._sample_period:
+            self._time_since_sample = 0.0
+            theta2 = self._measure_angle(true_state[2], self.config.theta2_bias_deg)
+            theta3 = self._measure_angle(true_state[3], self.config.theta3_bias_deg)
+
+            if self._last_theta2 is not None:
+                dtheta2_raw = self._wrap(theta2 - self._last_theta2) / self._sample_period
+                dtheta3_raw = self._wrap(theta3 - self._last_theta3) / self._sample_period
+                alpha = float(np.clip(self.config.velocity_alpha, 0.0, 1.0))
+                self._dtheta2_est = (1.0 - alpha) * self._dtheta2_est + alpha * dtheta2_raw
+                self._dtheta3_est = (1.0 - alpha) * self._dtheta3_est + alpha * dtheta3_raw
+
+            self._last_theta2 = theta2
+            self._last_theta3 = theta3
+
+            self.last_observation = np.array(
+                [
+                    true_state[0],
+                    true_state[1],
+                    theta2,
+                    theta3,
+                    true_state[4],
+                    true_state[5],
+                    true_state[6] if self.config.use_true_angular_rates else self._dtheta2_est,
+                    true_state[7] if self.config.use_true_angular_rates else self._dtheta3_est,
+                ],
+                dtype=float,
+            )
+
+        return self.last_observation.copy()
+
+
+class MeasuredStateController:
+    """
+    Wraps an existing controller so it acts on observed rather than true state.
+
+    This is the simplest way to test hardware-oriented sensing assumptions in
+    the physics simulator without rewriting the controllers themselves.
+    """
+
+    def __init__(self, base_controller, observer: TwoPotentiometerObserver) -> None:
+        self.base_controller = base_controller
+        self.observer = observer
+        self.last_observation: Optional[np.ndarray] = None
+
+    @property
+    def mode(self) -> Optional[str]:
+        return getattr(self.base_controller, "mode", None)
+
+    @property
+    def switch_time(self) -> Optional[float]:
+        return getattr(self.base_controller, "switch_time", None)
+
+    def reset(self) -> None:
+        self.observer.reset()
+        self.last_observation = None
+        self.base_controller.reset()
+
+    def update_integrals(
+        self, state: np.ndarray, dt: float, x_ref: float = 0.0
+    ) -> None:
+        measured = self.observer.observe(state, dt)
+        self.last_observation = measured.copy()
+        self.base_controller.update_integrals(measured, dt, x_ref)
+
+    def compute(
+        self, state: np.ndarray, dt: float = 0.01, x_ref: float = 0.0
+    ) -> float:
+        measured = self.observer.observe(state, dt)
+        self.last_observation = measured.copy()
+        return self.base_controller.compute(measured, dt, x_ref)
 
 
 @dataclass
@@ -917,6 +1560,8 @@ class SimulationResult:
     dtheta3: np.ndarray   # Link 3 angular velocity [rad/s]
     force:   np.ndarray   # Applied control force [N]
     states:  np.ndarray   # Full 8-element state matrix (N × 8)
+    observed_states: Optional[np.ndarray] = None   # Controller-visible state history
+    secondary_torque: Optional[np.ndarray] = None   # Applied slower-motor torque [N·m]
 
 
 class Simulation:
@@ -984,6 +1629,9 @@ class Simulation:
         # Stall force of the motor — used to normalise controller output to
         # a voltage command in [−1, +1] before feeding the motor model.
         stall_f = self.motor.stall_force() if self.motor else 1.0
+        secondary_motor = getattr(self.controller, "secondary_motor_model", None)
+        joint1_sign = getattr(self.controller, "joint1_sign", 1.0)
+        stall_tau = secondary_motor.stall_torque_Nm if secondary_motor else 1.0
 
         t_start, t_end = t_span
         t_steps = np.arange(t_start, t_end, dt_output)
@@ -991,21 +1639,30 @@ class Simulation:
         # Pre-allocate output arrays
         n = len(t_steps)
         out_states = np.empty((n, 8))
+        out_observed_states = np.empty((n, 8))
         out_forces = np.empty(n)
+        out_secondary_torques = np.zeros(n)
 
         state = np.array(initial_state, dtype=float)
-        print(f"Integrating t=[{t_start}, {t_end}] s  ({n} control steps) …")
+        print(f"Integrating t=[{t_start}, {t_end}] s  ({n} control steps) ...")
 
         for k, t_now in enumerate(t_steps):
             t_next = min(t_now + dt_output, t_end)
 
             # ── 1. Evaluate control force at current state ─────────────────
             if self.controller is not None:
-                f_cmd = self.controller.compute(state, dt_output)
+                raw_command = self.controller.compute(state, dt_output)
+                if isinstance(raw_command, ActuationCommand):
+                    f_cmd = raw_command.cart_force
+                    tau_cmd = raw_command.joint1_torque
+                else:
+                    f_cmd = float(raw_command)
+                    tau_cmd = 0.0
             else:
                 f_cmd = 0.0
+                tau_cmd = 0.0
 
-            # ── 2. Pass through motor model (back-EMF, saturation) ─────────
+            # ── 2. Pass through motor model(s) (back-EMF, saturation) ──────
             if use_motor_model and self.motor is not None:
                 # Normalise desired force to a voltage command [−1, +1]
                 command = float(np.clip(f_cmd / stall_f, -1.0, 1.0))
@@ -1013,14 +1670,38 @@ class Simulation:
             else:
                 F_cart = f_cmd
 
+            if use_motor_model and secondary_motor is not None:
+                command_tau = float(np.clip(tau_cmd / stall_tau, -1.0, 1.0))
+                tau_joint1 = secondary_motor.torque_from_command(
+                    command_tau,
+                    joint_speed_rads=state[5],
+                )
+            else:
+                tau_joint1 = tau_cmd
+
             # Record output for this step
             out_states[k] = state
+            observed = getattr(self.controller, "last_observation", None)
+            out_observed_states[k] = (
+                state if observed is None else np.array(observed, dtype=float)
+            )
             out_forces[k] = F_cart
+            out_secondary_torques[k] = tau_joint1
 
             # ── 3. Integrate ODE for one control interval (F is constant) ──
             # The ODE function is now stateless within this interval.
-            def ode_rhs(t: float, s: np.ndarray, _F: float = F_cart) -> np.ndarray:
-                return self.physics.equations_of_motion(s, _F)
+            def ode_rhs(
+                t: float,
+                s: np.ndarray,
+                _F: float = F_cart,
+                _tau: float = tau_joint1,
+            ) -> np.ndarray:
+                return self.physics.equations_of_motion(
+                    s,
+                    _F,
+                    tau_joint1=_tau,
+                    joint1_sign=joint1_sign,
+                )
 
             sol = solve_ivp(
                 ode_rhs,
@@ -1037,6 +1718,18 @@ class Simulation:
                 # Keep the last successfully integrated state and continue
             else:
                 state = sol.y[:, -1]
+
+            # ── 3b. Hard cart wall enforcement (fully inelastic) ──────────
+            # The EOM only zeros acceleration at the wall; the cart still drifts
+            # past at its current velocity.  Clamp position and zero outward
+            # velocity so the cart can't escape the track.
+            p = self.physics.params
+            if state[0] < p.x_min:
+                state[0] = p.x_min
+                state[4] = max(0.0, state[4])   # kill leftward vel, keep rightward
+            elif state[0] > p.x_max:
+                state[0] = p.x_max
+                state[4] = min(0.0, state[4])   # kill rightward vel, keep leftward
 
             # ── 4. Update controller integral accumulators ─────────────────
             # Done AFTER the ODE step (so integrals advance once per control
@@ -1057,6 +1750,8 @@ class Simulation:
             dtheta3=out_states[:, 7],
             force=out_forces,
             states=out_states,
+            observed_states=out_observed_states,
+            secondary_torque=out_secondary_torques,
         )
 
 
@@ -1073,10 +1768,16 @@ class Visualizer:
       • plot_time_series() — multi-panel time-series plots of angles, cart, force.
     """
 
-    def __init__(self, physics: TriplePendulumPhysics, result: SimulationResult) -> None:
+    def __init__(
+        self,
+        physics: TriplePendulumPhysics,
+        result: SimulationResult,
+        switch_time: Optional[float] = None,
+    ) -> None:
         self.physics = physics
         self.result = result
         self._p = physics.params
+        self.switch_time = switch_time   # LQR catch time for HybridController runs
 
     # ── Animation ─────────────────────────────────────────────────────────────
     def animate(
@@ -1103,9 +1804,10 @@ class Visualizer:
         total_len = p.l1 + p.l2 + p.l3
         margin = 0.15
 
-        fig, ax = plt.subplots(figsize=(10, 6))
+        # Y-axis spans the full pendulum range (hanging down through upright)
+        fig, ax = plt.subplots(figsize=(10, 8))
         ax.set_xlim(p.x_min - margin, p.x_max + margin)
-        ax.set_ylim(-0.2, total_len + margin)
+        ax.set_ylim(-total_len - margin, total_len + margin)
         ax.set_aspect("equal")
         ax.set_xlabel("Cart position x [m]")
         ax.set_ylabel("Height [m]")
@@ -1135,26 +1837,34 @@ class Visualizer:
 
         # Time label
         time_text = ax.text(
-            0.02, 0.96, "", transform=ax.transAxes, fontsize=10, va="top"
+            0.02, 0.97, "", transform=ax.transAxes, fontsize=10, va="top"
+        )
+
+        # Controller mode label (shows "Swing-up" or "LQR Balance")
+        mode_text = ax.text(
+            0.02, 0.91, "", transform=ax.transAxes, fontsize=10, va="top",
+            fontweight="bold",
         )
 
         # Angle readouts
         angle_text = ax.text(
-            0.70, 0.96, "", transform=ax.transAxes, fontsize=9, va="top",
+            0.72, 0.97, "", transform=ax.transAxes, fontsize=9, va="top",
             family="monospace"
         )
 
         # Subsample for animation frame rate
         n_frames = len(r.t)
         step = max(1, int(n_frames / (r.t[-1] * 1000 / interval_ms / speed_factor)))
+        sw_t = self.switch_time  # capture once to avoid closure issues
 
         def init():
             pivot_dot.set_data([], [])
             for ln in link_lines:
                 ln.set_data([], [])
             time_text.set_text("")
+            mode_text.set_text("")
             angle_text.set_text("")
-            return link_lines + [cart_patch, pivot_dot, time_text, angle_text]
+            return link_lines + [cart_patch, pivot_dot, time_text, mode_text, angle_text]
 
         def update(frame_idx: int):
             i = frame_idx * step
@@ -1182,13 +1892,23 @@ class Visualizer:
                 [tips["tip2"][1], tips["tip3"][1]],
             )
 
-            time_text.set_text(f"t = {r.t[i]:.3f} s")
+            t_now = r.t[i]
+            time_text.set_text(f"t = {t_now:.3f} s")
+
+            # Update controller mode label
+            if sw_t is None or t_now < sw_t:
+                mode_text.set_text("Phase: Swing-up (energy pumping)")
+                mode_text.set_color("darkorange")
+            else:
+                mode_text.set_text("Phase: LQR Balance")
+                mode_text.set_color("mediumseagreen")
+
             angle_text.set_text(
                 f"θ1={np.degrees(state[1]):+6.1f}°\n"
                 f"θ2={np.degrees(state[2]):+6.1f}°\n"
                 f"θ3={np.degrees(state[3]):+6.1f}°"
             )
-            return link_lines + [cart_patch, pivot_dot, time_text, angle_text]
+            return link_lines + [cart_patch, pivot_dot, time_text, mode_text, angle_text]
 
         n_anim_frames = n_frames // step
         anim = animation.FuncAnimation(
@@ -1201,7 +1921,7 @@ class Visualizer:
         )
 
         if save_path:
-            print(f"Saving animation to {save_path} …")
+            print(f"Saving animation to {save_path} ...")
             writer = (
                 animation.PillowWriter(fps=int(1000 / interval_ms))
                 if save_path.endswith(".gif")
@@ -1223,16 +1943,39 @@ class Visualizer:
         """
         r = self.result
         t = r.t
+        sw = self.switch_time  # None for non-hybrid runs
+        observed = r.observed_states
 
         fig, axes = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
-        fig.suptitle("Triple Inverted Pendulum — Time Series", fontsize=13)
+        title = "Triple Inverted Pendulum — Time Series"
+        if sw is not None:
+            title += f"  (swing-up → LQR at t = {sw:.2f} s)"
+        fig.suptitle(title, fontsize=13)
+
+        def _vline(ax: plt.Axes) -> None:
+            """Draw phase-transition marker on an axis."""
+            if sw is not None:
+                ax.axvline(
+                    sw, color="royalblue", linewidth=1.5,
+                    linestyle="--", alpha=0.8, label=f"LQR catch (t={sw:.1f} s)"
+                )
 
         # ── Panel 1: angles ───────────────────────────────────────────────
         ax = axes[0]
         ax.plot(t, np.degrees(r.theta1), label="θ1 (bottom)", color="tomato")
         ax.plot(t, np.degrees(r.theta2), label="θ2 (middle)", color="goldenrod")
         ax.plot(t, np.degrees(r.theta3), label="θ3 (top)",    color="mediumseagreen")
+        if observed is not None:
+            ax.plot(
+                t, np.degrees(observed[:, 2]),
+                label="θ2 meas", color="goldenrod", linestyle=":", alpha=0.8,
+            )
+            ax.plot(
+                t, np.degrees(observed[:, 3]),
+                label="θ3 meas", color="mediumseagreen", linestyle=":", alpha=0.8,
+            )
         ax.axhline(0, color="gray", linewidth=0.8, linestyle="--")
+        _vline(ax)
         ax.set_ylabel("Angle [°]")
         ax.legend(loc="upper right", fontsize=9)
         ax.grid(True, alpha=0.3)
@@ -1242,7 +1985,17 @@ class Visualizer:
         ax.plot(t, np.degrees(r.dtheta1), label="θ̇1", color="tomato",      linestyle="--")
         ax.plot(t, np.degrees(r.dtheta2), label="θ̇2", color="goldenrod",   linestyle="--")
         ax.plot(t, np.degrees(r.dtheta3), label="θ̇3", color="mediumseagreen", linestyle="--")
+        if observed is not None:
+            ax.plot(
+                t, np.degrees(observed[:, 6]),
+                label="θ̇2 est", color="goldenrod", linestyle=":", alpha=0.8,
+            )
+            ax.plot(
+                t, np.degrees(observed[:, 7]),
+                label="θ̇3 est", color="mediumseagreen", linestyle=":", alpha=0.8,
+            )
         ax.axhline(0, color="gray", linewidth=0.8, linestyle="--")
+        _vline(ax)
         ax.set_ylabel("Angular vel. [°/s]")
         ax.legend(loc="upper right", fontsize=9)
         ax.grid(True, alpha=0.3)
@@ -1251,9 +2004,10 @@ class Visualizer:
         ax = axes[2]
         ax.plot(t, r.x,  label="x (position)", color="steelblue")
         ax.plot(t, r.dx, label="ẋ (velocity)",  color="steelblue", linestyle="--", alpha=0.7)
-        ax.axhline(0,          color="gray",   linewidth=0.8, linestyle="--")
+        ax.axhline(0,             color="gray",   linewidth=0.8, linestyle="--")
         ax.axhline(self._p.x_min, color="salmon", linewidth=0.8, linestyle=":")
         ax.axhline(self._p.x_max, color="salmon", linewidth=0.8, linestyle=":")
+        _vline(ax)
         ax.set_ylabel("Cart x [m] / ẋ [m/s]")
         ax.legend(loc="upper right", fontsize=9)
         ax.grid(True, alpha=0.3)
@@ -1262,6 +2016,7 @@ class Visualizer:
         ax = axes[3]
         ax.plot(t, r.force, label="F_cart", color="purple")
         ax.axhline(0, color="gray", linewidth=0.8, linestyle="--")
+        _vline(ax)
         ax.set_ylabel("Force [N]")
         ax.set_xlabel("Time [s]")
         ax.legend(loc="upper right", fontsize=9)
@@ -1355,7 +2110,7 @@ def config_pd_stabilise() -> tuple:
     motor = MotorModel()   # Motor present but bypassed for this config
     physics = TriplePendulumPhysics(params)
 
-    print("Computing LQR gains (pd_stabilise)…")
+    print("Computing LQR gains (pd_stabilise)...")
     controller = LQRController(
         physics=physics,
         # State weights: [x, θ1, θ2, θ3, ẋ, θ̇1, θ̇2, θ̇3]
@@ -1400,7 +2155,7 @@ def config_longer_links() -> tuple:
     motor = MotorModel(free_speed_rpm=1120.0, stall_torque_Nm=2.8)
     physics = TriplePendulumPhysics(params)
 
-    print("Computing LQR gains (longer_links)…")
+    print("Computing LQR gains (longer_links)...")
     controller = LQRController(
         physics=physics,
         Q_diag=[10.0, 2000.0, 2000.0, 2000.0, 1.0, 100.0, 100.0, 100.0],
@@ -1447,7 +2202,7 @@ def config_secondary_motor() -> tuple:
     motor = MotorModel.secondary_motor()
     physics = TriplePendulumPhysics(params)
 
-    print("Computing LQR gains (secondary_motor)…")
+    print("Computing LQR gains (secondary_motor)...")
     controller = LQRController(
         physics=physics,
         Q_diag=[10.0, 2000.0, 2000.0, 2000.0, 1.0, 100.0, 100.0, 100.0],
@@ -1466,12 +2221,191 @@ def config_secondary_motor() -> tuple:
     return params, motor, controller, initial_state, False
 
 
+def config_hardware_balance() -> tuple:
+    """
+    Configuration E — Hardware-length balance demo with a larger local rail.
+
+    This is the most reliable local configuration for controller and sensor
+    development.  It uses the requested link lengths and a local-only rail
+    range large enough for the aggressive balance controller to recover.
+    """
+    params = SystemParameters(
+        M_cart=2.0,
+        l1=0.20, m1=0.15,
+        l2=0.15, m2=0.10,
+        l3=0.10, m3=0.08,
+        x_min=-3.0, x_max=3.0,
+        cart_friction=1.0,
+        joint_damping=0.0005,
+    )
+    motor = MotorModel()
+    physics = TriplePendulumPhysics(params)
+
+    print("Computing LQR gains for hardware_balance ...")
+    controller = LQRController(
+        physics=physics,
+        Q_diag=[10.0, 8000.0, 8000.0, 8000.0, 1.0, 400.0, 400.0, 400.0],
+        R=0.0001,
+        max_force=600.0,
+    )
+
+    initial_state = np.array([
+        0.0,
+        np.radians(8.0),
+        np.radians(8.0),
+        np.radians(8.0),
+        0.0, 0.0, 0.0, 0.0,
+    ])
+    return params, motor, controller, initial_state, False
+
+
+def config_v2_dual_balance() -> tuple:
+    """
+    Configuration F — Exact V2-URDF geometry with dual real-actuator physics.
+
+    Uses:
+      - x-axis actuation through the V2 `x_axis_1 / x_axis_2` lead-screw path
+      - slower rotary actuation through the V2 secondary revolute mate
+      - passive link lengths extracted directly from the uploaded V2 URDF
+
+    This is the most physically grounded local balance mode currently in the
+    repo. The raw CAD-export travel limits are placeholders, so the simulator
+    enforces the physical rail range of ±0.14 m.
+    """
+    dims = load_v2_mechanism_dimensions()
+    params = SystemParameters(
+        M_cart=2.0,
+        l1=dims.link1_m, m1=0.15,
+        l2=dims.link2_m, m2=0.10,
+        l3=dims.link3_m, m3=0.08,
+        x_min=-dims.rail_limit_m, x_max=dims.rail_limit_m,
+        cart_friction=1.0,
+        joint_damping=0.005,
+    )
+    motor = MotorModel(
+        lead_mm=dims.lead_m_per_rev * 1e3,
+        max_force_N=700.0,
+    )
+    physics = TriplePendulumPhysics(params)
+
+    print("Computing dual-input LQR gains for v2_dual_balance ...")
+    controller = DualInputLQRController(
+        physics=physics,
+        Q_diag=[
+            3.8344152780846716,
+            334.4171731531393,
+            773.2118516660596,
+            28202.6905434322,
+            1.4150798590751337,
+            19.488663673184387,
+            10.241948453505868,
+            79.40920931463543,
+        ],
+        R_diag=[0.09981155354073941, 0.0021478724678999604],
+        max_cart_force=4000.0,
+        max_joint1_torque=5.2,
+        joint1_sign=-1.0,
+        secondary_motor_model=RotaryMotorModel.secondary_motor(),
+    )
+
+    # Verified local basin for the dual-input, motor-limited V2 model.
+    initial_state = np.array([
+        0.0,
+        np.radians(1.0),
+        np.radians(1.0),
+        np.radians(1.0),
+        0.0, 0.0, 0.0, 0.0,
+    ])
+    return params, motor, controller, initial_state, True
+
+
+def config_swing_up() -> tuple:
+    """
+    Configuration F — Full swing-up from rest → LQR balance (hardware dimensions).
+
+    Hardware link dimensions: l1=0.20 m, l2=0.15 m, l3=0.10 m.
+
+    Starts with all three links hanging straight down (θ1=θ2=θ3=π rad) and
+    a small asymmetric angular velocity kick.  An energy-pumping
+    SwingUpController oscillates the cart to inject mechanical energy into the
+    pendulum chain.  Once all three link angles are simultaneously within 20°
+    of the upright AND angular velocities are below 6 rad/s, the
+    HybridController switches to LQR to hold balance.
+
+    End-to-end pipeline
+    -------------------
+    rest (hanging) → energy-pumping swing-up → LQR catch & balance
+
+    Recommended runtime:  30 s
+        python triple_pendulum_simulation.py --config swing_up --t_end 30
+
+    Physics notes
+    -------------
+    • Cart travel extended to ±3.0 m for the local-only swing-up sandbox.
+    • Joint damping 0.0005 N·m·s/rad — low so swings build amplitude quickly.
+    • Motor model bypassed (ideal force) for reliable LQR catch.
+    • E_ref ≈ 1.46 J  (energy to raise all three links from hanging to upright).
+    """
+    params = SystemParameters(
+        M_cart=2.0,
+        l1=0.20, m1=0.15,   # hardware link 1
+        l2=0.15, m2=0.10,   # hardware link 2
+        l3=0.10, m3=0.08,   # hardware link 3
+        x_min=-3.0, x_max=3.0,
+        cart_friction=1.0,
+        joint_damping=0.0005,
+    )
+    motor = MotorModel()
+    physics = TriplePendulumPhysics(params)
+
+    print("Computing LQR gains for balance phase ...")
+    lqr = LQRController(
+        physics=physics,
+        Q_diag=[10.0, 8000.0, 8000.0, 8000.0, 1.0, 400.0, 400.0, 400.0],
+        R=0.0001,
+        max_force=600.0,
+    )
+
+    swing_up = SwingUpController(
+        params=params,
+        k_sw=12.0,    # gentle energy-pumping gain — prevents over-spin
+        k_x=60.0,     # centering stiffness
+        k_dx=10.0,    # centering damping
+        max_force=600.0,
+    )
+
+    controller = HybridController(
+        swing_up=swing_up,
+        lqr=lqr,
+        capture_deg=18.0,        # angle window for LQR catch
+        capture_vel_rads=4.5,    # max angular speed at catch (LQR can handle this)
+        t_relax=30.0,
+        max_capture_deg=25.0,
+    )
+
+    # All links start on the SAME side (θ slightly below π) so they swing in
+    # phase — greatly increases the chance of a simultaneous near-upright event.
+    # Zero velocities = true "start from rest".
+    initial_state = np.array([
+        0.0,                         # cart at centre
+        np.pi - np.radians(8),       # θ1: 8° off toward upright
+        np.pi - np.radians(8),       # θ2: same side
+        np.pi - np.radians(8),       # θ3: same side
+        0.0, 0.0, 0.0, 0.0,         # all velocities zero (true rest)
+    ])
+
+    return params, motor, controller, initial_state, False
+
+
 # Map of named configurations for easy selection on the command line
 CONFIGURATIONS = {
     "free_swing":       config_free_swing,
     "pd_stabilise":     config_pd_stabilise,
     "longer_links":     config_longer_links,
     "secondary_motor":  config_secondary_motor,
+    "hardware_balance": config_hardware_balance,
+    "v2_dual_balance":  config_v2_dual_balance,
+    "swing_up":         config_swing_up,
 }
 
 
@@ -1480,7 +2414,7 @@ CONFIGURATIONS = {
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main(
-    config_name: str = "pd_stabilise",
+    config_name: str = "hardware_balance",
     t_end: float = 5.0,
     dt_output: float = 0.01,
     animate: bool = True,
@@ -1537,7 +2471,7 @@ def main(
         mode = "with motor model" if use_motor_model else "ideal force (motor model bypassed)"
         print(f"{ctrl_type} enabled ({mode}).")
     else:
-        print("No controller — free swing.")
+        print("No controller - free swing.")
     print()
 
     # ── Build physics engine ──────────────────────────────────────────────────
@@ -1547,6 +2481,21 @@ def main(
     physics = TriplePendulumPhysics(params)
 
     # ── Run simulation ────────────────────────────────────────────────────────
+    # The short-link local swing-up case is numerically stiff enough that it
+    # benefits from a faster controller / output step than the other configs.
+    if config_name == "swing_up" and dt_output > 0.002:
+        print(
+            "  [Note] swing_up config is running with a coarse dt. "
+            "Use --dt 0.002 for the best local balance-phase behaviour.\n"
+        )
+
+    # For swing_up the default t_end of 5 s is too short; suggest 30 s.
+    if config_name == "swing_up" and t_end < 20.0:
+        print(
+            "  [Note] swing_up config: t_end is short.  "
+            "Consider --t_end 60 for a full swing-up + balance run.\n"
+        )
+
     sim = Simulation(physics, controller, motor)
     result = sim.run(
         t_span=(0.0, t_end),
@@ -1555,8 +2504,20 @@ def main(
         use_motor_model=use_motor_model,
     )
 
+    # ── Extract switch time from HybridController (if applicable) ────────────
+    switch_time: Optional[float] = None
+    if isinstance(controller, HybridController):
+        switch_time = controller.switch_time
+        if switch_time is None:
+            print(
+                "\n  [Warning] HybridController never captured — "
+                "LQR was not engaged.  Try a longer run (--t_end 30)."
+            )
+
     # ── Print summary statistics ──────────────────────────────────────────────
     print("\nResults summary:")
+    if switch_time is not None:
+        print(f"  Swing-up → LQR capture at  t = {switch_time:.3f} s")
     print(f"  Cart x range: [{result.x.min():.4f}, {result.x.max():.4f}] m")
     print(f"  θ1 range: [{np.degrees(result.theta1.min()):.1f}°, "
           f"{np.degrees(result.theta1.max()):.1f}°]")
@@ -1567,7 +2528,7 @@ def main(
     print(f"  Max |F_cart|: {np.max(np.abs(result.force)):.1f} N")
 
     # ── Visualise ─────────────────────────────────────────────────────────────
-    viz = Visualizer(physics, result)
+    viz = Visualizer(physics, result, switch_time=switch_time)
 
     # Time-series plot (always generated)
     fig_ts = viz.plot_time_series(save_path=save_plot)
@@ -1598,17 +2559,27 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--config",
-        default="pd_stabilise",
+        default="hardware_balance",
         choices=list(CONFIGURATIONS.keys()),
-        help="Named test configuration to run (default: pd_stabilise).",
+        help=(
+            "Named test configuration to run (default: hardware_balance). "
+            "Choices: " + ", ".join(CONFIGURATIONS.keys())
+        ),
     )
     parser.add_argument(
-        "--t_end", type=float, default=5.0,
-        help="Simulation duration in seconds (default: 5.0).",
+        "--t_end", type=float, default=None,
+        help=(
+            "Simulation duration in seconds. "
+            "Defaults to 30 s for swing_up, 5 s for all other configs."
+        ),
     )
     parser.add_argument(
-        "--dt", type=float, default=0.01,
-        help="Output time resolution in seconds (default: 0.01).",
+        "--dt", type=float, default=None,
+        help=(
+            "Output time resolution in seconds. "
+            "Defaults to 0.002 s for hardware_balance and swing_up, "
+            "and 0.01 s for other configs."
+        ),
     )
     parser.add_argument(
         "--no-animate", action="store_true",
@@ -1628,10 +2599,19 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    # Auto-set t_end: swing_up needs more time than the other configs
+    t_end = args.t_end
+    if t_end is None:
+        t_end = 60.0 if args.config == "swing_up" else 5.0
+
+    dt_output = args.dt
+    if dt_output is None:
+        dt_output = 0.002 if args.config in {"hardware_balance", "swing_up"} else 0.01
+
     main(
         config_name=args.config,
-        t_end=args.t_end,
-        dt_output=args.dt,
+        t_end=t_end,
+        dt_output=dt_output,
         animate=not args.no_animate,
         save_animation=args.save_anim,
         save_plot=args.save_plot,

@@ -7,10 +7,13 @@ A self-contained Python simulation of a **triple inverted pendulum on a motorise
 ## Quick start
 
 ```bash
-pip install numpy scipy matplotlib
+pip install numpy scipy matplotlib "mujoco<3.2"
+
+# Local UI with the hardware-length physics model and potentiometer channels
+python triple_pendulum_ui.py
 
 # Watch the LQR controller stabilise the pendulum
-python triple_pendulum_simulation.py --config pd_stabilise --t_end 5
+python triple_pendulum_simulation.py --config hardware_balance --t_end 5
 
 # Free fall (no control) — watch the physics
 python triple_pendulum_simulation.py --config free_swing --t_end 3
